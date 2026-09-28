@@ -123,6 +123,9 @@ class SyncServer:
                 except (ValueError, json.JSONDecodeError):
                     self._reply(400, {"ok": False})
                     return
+                if self.path == "/hello":      # 방송(UDP) 찾기가 막힌 공유기에서 폰이 주소를 하나씩 두드려 찾을 때
+                    self._reply(200, {"app": "idea-board", "port": SYNC_PORT, "name": server.config["name"]})
+                    return
                 if self.path == "/pair":
                     self._reply(*server._pair(body))
                     return
