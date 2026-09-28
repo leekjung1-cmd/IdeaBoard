@@ -5,13 +5,15 @@
 from datetime import date, datetime
 from html import escape
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QToolTip, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QToolTip, QVBoxLayout,
+    QWidget,
 )
 
 import theme
+from todo import PAPER, dday as todo_dday
 from store import HIGH, QUADRANTS, quadrant
 
 LEVELS = 5
@@ -490,10 +492,112 @@ class SchedulePanel(QFrame):
         self.scroll.setWidget(body)
 
 
+# ---------------------------------------------------------------- 할일 (일정 보드 아래)
+
+class TodoRow(QFrame):
+    """할일 한 줄: 끝냄 체크 · 포스트잇 색 · 글 · 기한."""
+
+    def __init__(self, row, on_toggle, parent=None):
+        super().__init__(parent)
+        self.setObjectName("trow")
+        self.setStyleSheet("#trow { border-radius:6px; } #trow:hover { background:%s; }" % theme.ITEM_HOVER)
+        box = QCheckBox()
+        box.setChecked(bool(row["done"]))
+        box.setToolTip("끝냄")
+        box.toggled.connect(lambda on: on_toggle(row["uuid"], on))
+        chip = QLabel()
+        chip.setFixedSize(12, 12)
+        chip.setStyleSheet("background:%s; border-radius:2px;" % PAPER.get(row["color"], PAPER["yellow"]))
+        first = (row["text"] or "(빈 할일)").splitlines()[0]
+        self.text = QLabel()
+        self.text.setMinimumWidth(10)
+        self._full = first
+        self.text.setToolTip(row["text"] + ("\n💡 " + row["idea_title"] if row["idea_title"] else ""))
+        if row["done"]:
+            self.text.setStyleSheet("color:%s; text-decoration: line-through;" % theme.TEXT_DIM)
+        label, col = todo_dday(row["due_date"])
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(4, 3, 6, 3)
+        lay.setSpacing(6)
+        lay.addWidget(box)
+        lay.addWidget(chip)
+        lay.addWidget(self.text, 1)
+        if label and not row["done"]:
+            d = QLabel(label)
+            d.setStyleSheet("color:%s; font-weight:bold;" % (theme.DANGER if col == "#c0392b" else
+                                                              theme.QUAD[3] if col == "#a15c00" else theme.TEXT_DIM))
+            lay.addWidget(d)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        fm = self.text.fontMetrics()
+        self.text.setText(fm.elidedText(self._full, Qt.ElideRight, max(20, self.text.width())))
+
+
+class TodoPanel(QFrame):
+    """일정 보드 아래 '할일' 칸. 제목을 누르거나 칸을 더블클릭하면 포스트잇 창."""
+    openRequested = Signal()
+    toggled = Signal(str, bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("todos")
+        self.setStyleSheet("#todos { background:%s; border:1px solid %s; border-radius:10px; }"
+                           % (theme.SIDEBAR, theme.BORDER))
+        self.setToolTip("더블클릭하면 포스트잇 창이 열려요")
+        head = QPushButton("할일   ⤢ 포스트잇")
+        head.setToolTip("할일을 포스트잇 벽으로 크게 보기")
+        head.setCursor(Qt.PointingHandCursor)
+        f = head.font()
+        f.setPointSize(12)
+        f.setBold(True)
+        head.setFont(f)
+        head.setStyleSheet("QPushButton { text-align:left; border:none; background:transparent; padding:2px 4px; }"
+                           "QPushButton:hover { color:%s; background:%s; border-radius:5px; }"
+                           % (theme.ACCENT, theme.ITEM_HOVER))
+        head.clicked.connect(self.openRequested)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background:transparent; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 6, 8)
+        lay.setSpacing(6)
+        lay.addWidget(head)
+        lay.addWidget(self.scroll, 1)
+
+    def mouseDoubleClickEvent(self, ev):
+        self.openRequested.emit()
+
+    def fill(self, rows):
+        open_rows = sorted((r for r in rows if not r["done"]), key=lambda r: (r["due_date"] or "9999", r["created_at"]))
+        done_n = sum(1 for r in rows if r["done"])
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 4, 0)
+        lay.setSpacing(1)
+        for r in open_rows:
+            lay.addWidget(TodoRow(r, lambda tid, on: self.toggled.emit(tid, on)))
+        if not open_rows:
+            empty = QLabel("할일이 없어요.\n더블클릭해서 포스트잇을 붙여보세요." if not done_n else "다 끝냈어요 👏")
+            empty.setWordWrap(True)
+            empty.setStyleSheet("color:%s; padding:8px 4px;" % theme.TEXT_DIM)
+            lay.addWidget(empty)
+        if done_n:
+            lb = QLabel("끝낸 것 %d개" % done_n)
+            lb.setStyleSheet("color:%s; padding:8px 4px 0 4px;" % theme.TEXT_OFF)
+            lay.addWidget(lb)
+        lay.addStretch(1)
+        self.scroll.setWidget(body)
+
+
 class DashboardPage(QWidget):
     opened = Signal(str)
     changed = Signal(str)
     ganttRequested = Signal()
+    todosRequested = Signal()
+    todoChanged = Signal()
 
     def __init__(self, store_, parent=None):
         super().__init__(parent)
@@ -510,14 +614,23 @@ class DashboardPage(QWidget):
         self.chart.opened.connect(self.opened)
         self.chart.moved.connect(self._moved)
         self.schedule = SchedulePanel()
-        self.schedule.setFixedWidth(260)
         self.schedule.opened.connect(self.opened)
         self.schedule.expandRequested.connect(self.ganttRequested)
+        self.todos = TodoPanel()
+        self.todos.openRequested.connect(self.todosRequested)
+        self.todos.toggled.connect(self._todo_toggled)
+        side = QWidget()
+        side.setFixedWidth(260)
+        sl = QVBoxLayout(side)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(10)
+        sl.addWidget(self.schedule, 3)
+        sl.addWidget(self.todos, 2)
 
         row = QHBoxLayout()
         row.setSpacing(14)
         row.addWidget(self.chart, 1)
-        row.addWidget(self.schedule)
+        row.addWidget(side)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 20, 20, 16)
         lay.setSpacing(6)
@@ -532,8 +645,14 @@ class DashboardPage(QWidget):
         rows.sort(key=lambda r: (r["status"] == "보류", r["due_date"] or "9999", -r["activity"]))
         self.chart.set_rows(rows)
         self.schedule.fill(rows)
+        self.todos.fill(self.store.todos())
         self.note.setText("아이디어 %d개 (완료 제외) · 칩을 누르면 열리고, 끌어서 옮기면 중요도·긴급도가 바뀌어요. "
                           "가운데 선이 3(보통), %d 이상이 '높음'." % (len(rows), HIGH))
+
+    def _todo_toggled(self, tid, done):
+        self.store.update_todo(tid, done=1 if done else 0)
+        # 체크 신호 안에서 줄을 지우지 않게 다음 차례에 다시 그림
+        QTimer.singleShot(0, lambda: (self.todos.fill(self.store.todos()), self.todoChanged.emit()))
 
     def _moved(self, uid, imp, urg):
         self.store.update(uid, importance=imp, urgency=urg)

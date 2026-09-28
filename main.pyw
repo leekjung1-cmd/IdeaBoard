@@ -25,6 +25,7 @@ import store
 import sync
 import theme
 from version import VERSION
+from widgets import DateField
 from brief import BriefView
 from dashboard import DashboardPage
 from gantt import GanttWindow
@@ -32,6 +33,7 @@ import export
 from features import FeatureView
 from links import LinkButton
 from phone import PhoneDialog
+from todo import TodoWindow
 from memos import MemoView
 from store import QUADRANTS, STATUSES, quadrant
 
@@ -145,67 +147,6 @@ class CategoryCombo(QComboBox):
         self.setEditText(v or "")
         self.blockSignals(False)
         self._last = v or ""
-
-
-class DateField(QPushButton):
-    """비워둘 수 있는 날짜. 누르면 달력이 뜸."""
-    changed = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._value = None
-        self.setMinimumWidth(118)
-        self.clicked.connect(self._pick)
-        self._show()
-
-    def value(self):
-        return self._value
-
-    def setValue(self, v):
-        self._value = v or None
-        self._show()
-
-    def _show(self):
-        self.setText(self._value or "날짜 없음")
-        self.setStyleSheet("" if self._value else "color:%s;" % theme.TEXT_DIM)
-
-    def _set(self, v):
-        if v != self._value:
-            self.setValue(v)
-            self.changed.emit()
-
-    def _pick(self):
-        menu = QMenu(self)
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(4, 4, 4, 4)
-        cal = QCalendarWidget()
-        cal.setLocale(QLocale(QLocale.Korean, QLocale.SouthKorea))
-        cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
-        cal.setGridVisible(False)
-        if self._value:
-            cal.setSelectedDate(QDate.fromString(self._value, "yyyy-MM-dd"))
-        lay.addWidget(cal)
-        row = QHBoxLayout()
-        today = QPushButton("오늘")
-        clear = QPushButton("지우기")
-        row.addWidget(today)
-        row.addStretch(1)
-        row.addWidget(clear)
-        lay.addLayout(row)
-        act = QWidgetAction(menu)
-        act.setDefaultWidget(box)
-        menu.addAction(act)
-
-        def pick(d):
-            self._set(d.toString("yyyy-MM-dd"))
-            menu.close()
-
-        cal.clicked.connect(pick)
-        cal.activated.connect(pick)
-        today.clicked.connect(lambda: pick(QDate.currentDate()))
-        clear.clicked.connect(lambda: (self._set(None), menu.close()))
-        menu.exec(self.mapToGlobal(QPoint(0, self.height())))
 
 
 # ---------------------------------------------------------------- 새 아이디어 창
@@ -329,6 +270,7 @@ class Sidebar(QWidget):
     newRequested = Signal()
     dashboardRequested = Signal()
     ganttRequested = Signal()
+    todosRequested = Signal()
     appAction = Signal(str)
     ideaSelected = Signal(str)
     deleteRequested = Signal(str)
@@ -391,6 +333,12 @@ class Sidebar(QWidget):
         self.gantt_btn.setToolTip("시작일→목표일을 달력 위 막대로 보기 (Ctrl+T)")
         self.gantt_btn.clicked.connect(self.ganttRequested)
 
+        self.todo_btn = QPushButton()
+        self.todo_btn.setObjectName("sideBtn")
+        self.todo_btn.setToolTip("할일을 포스트잇 벽으로 보기 (Ctrl+Shift+T)")
+        self.todo_btn.clicked.connect(self.todosRequested)
+        self.set_todo_count(0)
+
         self.search = QLineEdit()
         self.search.setPlaceholderText("검색 (제목·기획서·메모)")
         self.search.setClearButtonEnabled(True)
@@ -432,6 +380,7 @@ class Sidebar(QWidget):
         top.addWidget(self.new_btn)
         top.addWidget(self.dash_btn)
         top.addWidget(self.gantt_btn)
+        top.addWidget(self.todo_btn)
         top.addSpacing(4)
         top.addWidget(self.search)
 
@@ -449,6 +398,9 @@ class Sidebar(QWidget):
         ver.setStyleSheet("color:%s; padding:2px 14px;" % theme.TEXT_OFF)
         ver.setToolTip("아이디어 보드 버전")
         lay.addWidget(ver)
+
+    def set_todo_count(self, n):
+        self.todo_btn.setText("☑  할일" + ("   %d" % n if n else ""))
 
     def current(self):
         it = self.list.currentItem()
@@ -864,6 +816,7 @@ class MainWindow(QMainWindow):
         self.settings_path = os.path.join(data_dir, "settings.json")
         self.settings = self._load_settings()
         self.gantt = None
+        self.todo_win = None
         # 폰 동기화 서버: 연결된 폰이 있을 때만 켜 둠 (없으면 '폰 연결' 창을 열 때 켬 → 방화벽 창도 그때만)
         self.sync = sync.SyncServer(os.path.join(data_dir, "sync.json"), self._sync_handle)
         if self.sync.devices():
@@ -891,6 +844,7 @@ class MainWindow(QMainWindow):
         self.sidebar.newRequested.connect(self.new_idea)
         self.sidebar.dashboardRequested.connect(self.show_dashboard)
         self.sidebar.ganttRequested.connect(self.open_gantt)
+        self.sidebar.todosRequested.connect(self.open_todos)
         self.sidebar.appAction.connect(self._app_action)
         self.sidebar.ideaSelected.connect(self.open_idea)
         self.sidebar.deleteRequested.connect(self.delete_idea)
@@ -899,9 +853,12 @@ class MainWindow(QMainWindow):
         self.dashboard.opened.connect(self.open_idea)
         self.dashboard.changed.connect(lambda _u: (self.sidebar.refresh(self.sidebar.current()), self._refresh_gantt()))
         self.dashboard.ganttRequested.connect(self.open_gantt)
+        self.dashboard.todosRequested.connect(self.open_todos)
+        self.dashboard.todoChanged.connect(self._todos_changed)
 
         QShortcut(QKeySequence("Ctrl+N"), self, self.new_idea)
         QShortcut(QKeySequence("Ctrl+T"), self, self.open_gantt)
+        QShortcut(QKeySequence("Ctrl+Shift+T"), self, self.open_todos)
         QShortcut(QKeySequence("Ctrl+F"), self, lambda: (self.sidebar.search.setFocus(),
                                                          self.sidebar.search.selectAll()))
 
@@ -918,6 +875,7 @@ class MainWindow(QMainWindow):
         self.sidebar.set_view_state(self.settings.get("list_view", {}))
         self.sidebar.viewChanged.connect(self._save_settings)
         self.sidebar.refresh()
+        self.sidebar.set_todo_count(self.store.open_todo_count())
         self.show_dashboard()
 
     # ---------- 화면 전환 ----------
@@ -1003,6 +961,7 @@ class MainWindow(QMainWindow):
         elif self.stack.currentWidget() is self.dashboard:
             self.dashboard.refresh()
         self._refresh_gantt()
+        self._todos_changed()
 
     def import_data(self):
         """다른 ideas.db(예전 폴더·백업·다른 PC)를 지금 데이터에 합친다."""
@@ -1030,6 +989,31 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "가져오기", "합쳤어요. (아이디어 %d개)\n새로 들어온 항목 %d개 · 더 최근 것으로 바뀐 항목 %d개\n"
                                 "(항목 = 아이디어·기획서 칸·메모·기능·링크)\n\n합치기 전 데이터는 백업해 뒀어요:\n%s"
                                 % (self.store.idea_count(), added, changed, bk or "-"))
+
+    # ---------- 할일 ----------
+    def open_todos(self):
+        if self.todo_win is None:
+            self.todo_win = TodoWindow(self.store, self)
+            self.todo_win.changed.connect(self._todos_changed_from_window)
+            self.todo_win.openIdea.connect(self._open_from_gantt)
+            geo = self.settings.get("todo_geometry")
+            if geo and QApplication.screenAt(QRect(*geo).center()) is not None:
+                self.todo_win.setGeometry(*geo)
+            self.todo_win.finished.connect(self._save_settings)
+        self.todo_win.show()
+        self.todo_win.raise_()
+        self.todo_win.activateWindow()
+
+    def _todos_changed(self):
+        """대시보드 칸에서 체크했을 때."""
+        self.sidebar.set_todo_count(self.store.open_todo_count())
+        if self.todo_win is not None and self.todo_win.isVisible():
+            self.todo_win.refresh()
+
+    def _todos_changed_from_window(self):
+        self.sidebar.set_todo_count(self.store.open_todo_count())
+        if self.stack.currentWidget() is self.dashboard:
+            self.dashboard.todos.fill(self.store.todos())
 
     def open_gantt(self):
         if self.gantt is None:
@@ -1081,9 +1065,10 @@ class MainWindow(QMainWindow):
         self.settings["maximized"] = self.isMaximized()
         self.settings["sidebar_width"] = self.split.sizes()[0]
         self.settings["list_view"] = self.sidebar.view_state()
-        if self.gantt is not None:
-            gg = self.gantt.normalGeometry() if self.gantt.isMaximized() else self.gantt.geometry()
-            self.settings["gantt_geometry"] = [gg.x(), gg.y(), gg.width(), gg.height()]
+        for key, win in (("gantt_geometry", self.gantt), ("todo_geometry", self.todo_win)):
+            if win is not None:
+                gg = win.normalGeometry() if win.isMaximized() else win.geometry()
+                self.settings[key] = [gg.x(), gg.y(), gg.width(), gg.height()]
         try:
             os.makedirs(self.data_dir, exist_ok=True)
             with open(self.settings_path, "w", encoding="utf-8") as f:

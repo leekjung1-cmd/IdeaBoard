@@ -107,13 +107,30 @@ CREATE TABLE IF NOT EXISTS links(
     deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS links_idea ON links(idea_uuid, created_at);
+-- 할일 (포스트잇). idea_uuid = 관련 아이디어(없어도 됨), x·y = 벽에 붙인 자리
+CREATE TABLE IF NOT EXISTS todos(
+    uuid TEXT PRIMARY KEY,
+    text TEXT NOT NULL DEFAULT '',
+    color TEXT NOT NULL DEFAULT 'yellow',
+    done INTEGER NOT NULL DEFAULT 0,
+    due_date TEXT,
+    idea_uuid TEXT,
+    x REAL,
+    y REAL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
 """
+
+TODO_COLORS = ["yellow", "pink", "green", "blue", "orange", "purple"]
 
 FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 
 # 저장 파일 구조 번호 (PRAGMA user_version). 1 = v1.0.0 (용도·필요한 기능·링크까지)
 # 2 = v1.2.1 (동기화 표마다 pc_seen: PC가 그 행을 받거나 합친 시각 → 폰 여러 대가 서로의 변경을 놓치지 않게)
-SCHEMA_VERSION = 2
+# 3 = v1.3.0 (할일 todos)
+SCHEMA_VERSION = 3
 
 
 def now_ms():
@@ -400,7 +417,8 @@ class Store:
 
     # ---------- 다른 파일(예전 데이터·백업·다른 PC)과 합치기 ----------
     MERGE_TABLES = (("ideas", ("uuid",)), ("sections", ("uuid",)), ("memos", ("uuid",)),
-                    ("features", ("uuid",)), ("links", ("uuid",)), ("brief", ("idea_uuid", "key")))
+                    ("features", ("uuid",)), ("links", ("uuid",)), ("todos", ("uuid",)),
+                    ("brief", ("idea_uuid", "key")))
 
     def merge_from(self, path):
         """path 의 데이터를 지금 데이터에 합친다. 없는 건 추가, 둘 다 있으면 더 최근에 고친 쪽(updated_at)이 남음.
@@ -454,7 +472,7 @@ class Store:
         return self.db.execute("SELECT COUNT(*) FROM ideas WHERE deleted=0").fetchone()[0]
 
     # ---------- 폰 동기화 ----------
-    SYNC_TABLES = ("ideas", "sections", "memos", "features", "links")
+    SYNC_TABLES = ("ideas", "sections", "memos", "features", "links", "todos")
 
     def apply_changes(self, changes):
         """폰에서 온 {표 이름: [행…]} 합치기. 돌려주는 값: (바뀐 행 수, 영향 받은 아이디어 uuid 집합)"""
@@ -488,3 +506,37 @@ class Store:
         return {t: [dict(r) for r in self.db.execute("SELECT * FROM %s WHERE updated_at > ? OR pc_seen > ?" % t,
                                                      (since, since))]
                 for t in self.SYNC_TABLES}
+
+    # ---------- 할일 (포스트잇) ----------
+    TODO_FIELDS = ("text", "color", "done", "due_date", "idea_uuid", "x", "y")
+
+    def todos(self):
+        """삭제 안 된 할일 전부 (+ 관련 아이디어 제목)."""
+        return self.db.execute("""SELECT t.*, i.title AS idea_title FROM todos t
+                                  LEFT JOIN ideas i ON i.uuid=t.idea_uuid AND i.deleted=0
+                                  WHERE t.deleted=0 ORDER BY t.created_at""").fetchall()
+
+    def open_todo_count(self):
+        return self.db.execute("SELECT COUNT(*) FROM todos WHERE deleted=0 AND done=0").fetchone()[0]
+
+    def add_todo(self, text, **fields):
+        tid = str(uuid.uuid4())
+        t = now_ms()
+        self.db.execute("INSERT INTO todos(uuid, text, created_at, updated_at) VALUES(?,?,?,?)", (tid, text.strip(), t, t))
+        if fields:
+            self.update_todo(tid, **fields)
+        self.db.commit()
+        return tid
+
+    def update_todo(self, tid, **fields):
+        bad = set(fields) - set(self.TODO_FIELDS)
+        if bad:
+            raise ValueError("모르는 항목: %s" % ", ".join(sorted(bad)))
+        if fields:
+            cols = ", ".join("%s=?" % k for k in fields)
+            self.db.execute("UPDATE todos SET %s, updated_at=? WHERE uuid=?" % cols, list(fields.values()) + [now_ms(), tid])
+            self.db.commit()
+
+    def delete_todo(self, tid):
+        self.db.execute("UPDATE todos SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), tid))
+        self.db.commit()
