@@ -5,6 +5,7 @@
 - 코드를 여러 번 틀리면 잠시 막는다.
 DB는 Qt 메인 스레드에서만 다루도록, 받은 요청은 큐에 넣고 메인 스레드가 처리한 결과를 돌려준다.
 """
+import ipaddress
 import json
 import queue
 import secrets
@@ -18,6 +19,15 @@ SYNC_PORT = 47332
 DISCOVERY_PORT = 47333
 DISCOVERY_ASK = b"IDEA_BOARD_FIND"
 MAX_FAILS, LOCK_SECONDS = 5, 300
+
+
+def is_home_network(addr):
+    """집 안(사설망)에서 온 요청인지. PC가 공인 IP로 인터넷에 바로 물려 있어도 밖에서는 못 들어오게."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback
 
 
 def local_ip():
@@ -105,6 +115,9 @@ class SyncServer:
                 return json.loads(self.rfile.read(length) or b"{}")
 
             def do_POST(self):
+                if not is_home_network(self.client_address[0]):
+                    self._reply(403, {"ok": False, "message": "집 와이파이 안에서만 연결할 수 있어요"})
+                    return
                 try:
                     body = self._body()
                 except (ValueError, json.JSONDecodeError):
@@ -166,7 +179,7 @@ class SyncServer:
                 data, addr = sock.recvfrom(256)
             except OSError:
                 return
-            if data.strip() == DISCOVERY_ASK:
+            if data.strip() == DISCOVERY_ASK and is_home_network(addr[0]):
                 reply = json.dumps({"app": "idea-board", "port": SYNC_PORT, "name": self.config["name"]})
                 sock.sendto(reply.encode("utf-8"), addr)
 
