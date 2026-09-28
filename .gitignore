@@ -1,0 +1,10 @@
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+
+# 개인 기록·설정 (절대 올리지 않음)
+data/

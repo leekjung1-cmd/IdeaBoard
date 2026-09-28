@@ -1,0 +1,439 @@
+"""아이디어 보드 저장소 (SQLite).
+
+나중에 폰과 동기화할 수 있게 모든 행에 uuid·updated_at(밀리초)·deleted를 둔다.
+삭제는 지우지 않고 deleted=1 (동기화 때 상대편에도 삭제를 알리기 위해).
+"""
+import os
+import sqlite3
+import time
+import uuid
+
+STATUSES = ["아이디어", "기획", "개발 중", "완료", "보류"]
+CATEGORIES = ["일상", "취미", "업무", "공용"]     # 용도 기본 목록 (직접 입력한 것도 쓸 수 있음)
+LEVELS = [1, 2, 3, 4, 5]          # 중요도·긴급도
+HIGH = 4                          # 이 값 이상이면 '높음'
+
+# 사분면 번호: 1 지금 할 것 / 2 계획할 것 / 3 빨리 끝낼 것 / 4 나중에 / 0 미분류
+QUADRANTS = {1: "지금 할 것", 2: "계획할 것", 3: "빨리 끝낼 것", 4: "나중에", 0: "미분류"}
+
+# 기획서 틀: (키, 제목, 도움말). '한 줄 요약'은 ideas.summary 에 있음.
+# 새 아이디어 기획서 기본 칸 (v1.1.0~). 칸은 아이디어마다 따로 저장되니 바꿔도 예전 아이디어는 그대로.
+BRIEF_FIELDS = [
+    ("intent", "개발 의도", "왜 만들려고 하나? 어떤 불편을 해결하고, 누가 쓰나?"),
+    ("features", "기능", "어떤 기능이 있어야 하나? (자세한 목록은 '필요한 기능' 탭)"),
+    ("tech", "플랫폼 · 기술", "윈도우 / 안드로이드 / 크롬 확장 … 쓸 기술"),
+]
+
+# 예전(v1.0.x) 기본 칸 8개 — 예전 아이디어 칸의 도움말과 아주 옛날 파일 옮기기에만 씀
+LEGACY_BRIEF_FIELDS = [
+    ("problem", "문제·불편", "지금 뭐가 불편한가? 지금은 어떻게 해결하고 있나?"),
+    ("users", "누가 쓰나", "나 혼자? 가족? 다른 사람들도?"),
+    ("mvp", "첫 버전 핵심 기능", "이것만 되면 쓸 수 있다 싶은 최소한의 기능"),
+    ("later", "나중에 할 것 · 안 할 것", "욕심나지만 첫 버전에서는 뺄 것"),
+    ("similar", "비슷한 기존 앱", "이미 있는 앱·프로그램과 아쉬운 점"),
+    ("tech", "플랫폼 · 기술", "윈도우 / 안드로이드 / 크롬 확장 … 쓸 기술"),
+    ("done", "완성 기준", "어떻게 되면 '다 만들었다'고 할 수 있나"),
+    ("questions", "미정 · 궁금한 점", "아직 못 정한 것, 알아봐야 할 것"),
+]
+
+IDEA_COLUMNS = ("title", "summary", "status", "category", "importance", "urgency",
+                "start_date", "due_date")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS ideas(
+    uuid TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '아이디어',
+    category TEXT NOT NULL DEFAULT '',      -- 용도 (일상/취미/업무/공용/직접 입력), '' = 안 정함
+    importance INTEGER,             -- 1~5, NULL = 미정
+    urgency INTEGER,                -- 1~5, NULL = 미정
+    start_date TEXT,                -- 'YYYY-MM-DD' 또는 NULL
+    due_date TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+-- 기획서 칸 (아이디어마다 따로). key = 기본 칸이면 BRIEF_FIELDS 키, 직접 만든 칸이면 NULL
+CREATE TABLE IF NOT EXISTS sections(
+    uuid TEXT PRIMARY KEY,
+    idea_uuid TEXT NOT NULL,
+    key TEXT,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    position REAL NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS sections_idea ON sections(idea_uuid, position);
+-- 예전(칸 고정) 기획서. 처음 열 때 sections 로 옮겨감
+CREATE TABLE IF NOT EXISTS brief(
+    idea_uuid TEXT NOT NULL,
+    key TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(idea_uuid, key)
+);
+CREATE TABLE IF NOT EXISTS memos(
+    uuid TEXT PRIMARY KEY,
+    idea_uuid TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS memos_idea ON memos(idea_uuid, created_at);
+-- 필요한 기능 목록. priority = FEATURE_PRIORITIES 중 하나
+CREATE TABLE IF NOT EXISTS features(
+    uuid TEXT PRIMARY KEY,
+    idea_uuid TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT '필수',
+    done INTEGER NOT NULL DEFAULT 0,
+    position REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS features_idea ON features(idea_uuid, position);
+-- 클로드 세션 등 바로가기 링크
+CREATE TABLE IF NOT EXISTS links(
+    uuid TEXT PRIMARY KEY,
+    idea_uuid TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS links_idea ON links(idea_uuid, created_at);
+"""
+
+FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
+
+# 저장 파일 구조 번호 (PRAGMA user_version). 1 = v1.0.0 (용도·필요한 기능·링크까지)
+SCHEMA_VERSION = 1
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def quadrant(importance, urgency):
+    if importance is None or urgency is None:
+        return 0
+    imp, urg = importance >= HIGH, urgency >= HIGH
+    if imp and urg:
+        return 1
+    if imp:
+        return 2
+    if urg:
+        return 3
+    return 4
+
+
+class Store:
+    def __init__(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self.db = sqlite3.connect(path)
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript(SCHEMA)
+        self._migrate()
+        self.db.commit()
+
+    def _migrate(self):
+        """예전 파일에 없는 칸 추가하고 파일에 구조 번호(user_version) 기록.
+        구조가 바뀌면 SCHEMA_VERSION 을 올리고 여기에 옮기는 코드를 더한다."""
+        ver = self.db.execute("PRAGMA user_version").fetchone()[0]
+        self.newer_file = ver > SCHEMA_VERSION      # 더 새 버전 프로그램이 만든 파일
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(ideas)")}
+        if "category" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+        if ver < SCHEMA_VERSION:
+            self.db.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
+
+    def categories(self):
+        """기본 용도 + 직접 입력해서 쓰고 있는 용도."""
+        used = [r[0] for r in self.db.execute(
+            "SELECT DISTINCT category FROM ideas WHERE deleted=0 AND category<>'' ORDER BY category")]
+        return CATEGORIES + [c for c in used if c not in CATEGORIES]
+
+    # ---------- 아이디어 ----------
+    def ideas(self, query=""):
+        """삭제 안 된 아이디어, 최근 활동 순. query 는 제목·요약·기획서·메모에서 찾음."""
+        sql = """
+            SELECT i.*, MAX(i.updated_at,
+                IFNULL((SELECT MAX(updated_at) FROM sections WHERE idea_uuid=i.uuid), 0),
+                IFNULL((SELECT MAX(updated_at) FROM memos WHERE idea_uuid=i.uuid AND deleted=0), 0),
+                IFNULL((SELECT MAX(updated_at) FROM features WHERE idea_uuid=i.uuid), 0)
+            ) AS activity
+            FROM ideas i WHERE i.deleted=0"""
+        args = []
+        q = query.strip()
+        if q:
+            like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            sql += """ AND (i.title LIKE ? ESCAPE '\\' OR i.summary LIKE ? ESCAPE '\\' OR i.category LIKE ? ESCAPE '\\'
+                OR EXISTS(SELECT 1 FROM sections b WHERE b.idea_uuid=i.uuid AND b.deleted=0
+                          AND (b.content LIKE ? ESCAPE '\\' OR b.title LIKE ? ESCAPE '\\'))
+                OR EXISTS(SELECT 1 FROM memos m WHERE m.idea_uuid=i.uuid AND m.deleted=0
+                          AND m.body LIKE ? ESCAPE '\\')
+                OR EXISTS(SELECT 1 FROM features f WHERE f.idea_uuid=i.uuid AND f.deleted=0
+                          AND f.text LIKE ? ESCAPE '\\'))"""
+            args = [like] * 7
+        sql += " ORDER BY activity DESC"
+        return self.db.execute(sql, args).fetchall()
+
+    def get(self, uid):
+        return self.db.execute("SELECT * FROM ideas WHERE uuid=? AND deleted=0", (uid,)).fetchone()
+
+    def create(self, title, **fields):
+        uid = str(uuid.uuid4())
+        t = now_ms()
+        self.db.execute("INSERT INTO ideas(uuid, title, created_at, updated_at) VALUES(?,?,?,?)",
+                        (uid, title.strip(), t, t))
+        if fields:
+            self._set(uid, fields, t)
+        self._default_sections(uid, {}, t)
+        self.db.commit()
+        return uid
+
+    def update(self, uid, **fields):
+        if fields:
+            self._set(uid, fields, now_ms())
+            self.db.commit()
+
+    def _set(self, uid, fields, t):
+        bad = set(fields) - set(IDEA_COLUMNS)
+        if bad:
+            raise ValueError("모르는 항목: %s" % ", ".join(sorted(bad)))
+        cols = ", ".join("%s=?" % k for k in fields)
+        self.db.execute("UPDATE ideas SET %s, updated_at=? WHERE uuid=?" % cols,
+                        list(fields.values()) + [t, uid])
+
+    def delete(self, uid):
+        self.db.execute("UPDATE ideas SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), uid))
+        self.db.commit()
+
+    # ---------- 기획서 칸 ----------
+    def _default_sections(self, uid, old, t):
+        # old = 아주 옛날(칸 고정) 기획서 내용 → 그때 칸 8개 그대로 옮김. 새 아이디어면 새 기본 칸.
+        fields = LEGACY_BRIEF_FIELDS if old else BRIEF_FIELDS
+        for i, (key, label, _hint) in enumerate(fields):
+            self.db.execute("""INSERT INTO sections(uuid, idea_uuid, key, title, content, position, updated_at)
+                               VALUES(?,?,?,?,?,?,?)""",
+                            (str(uuid.uuid4()), uid, key, label, old.get(key, ""), float(i + 1), t))
+
+    def delete_sections(self, sids):
+        t = now_ms()
+        self.db.executemany("UPDATE sections SET deleted=1, updated_at=? WHERE uuid=?", [(t, sid) for sid in sids])
+        self.db.commit()
+
+    def sections(self, uid):
+        """칸 목록 (순서대로). 칸이 하나도 없던 예전 아이디어면 기본 칸을 만들어 넣음."""
+        rows = self.db.execute("SELECT * FROM sections WHERE idea_uuid=? AND deleted=0 ORDER BY position",
+                               (uid,)).fetchall()
+        if rows or self.db.execute("SELECT 1 FROM sections WHERE idea_uuid=? LIMIT 1", (uid,)).fetchone():
+            return rows
+        old = {r["key"]: r["content"] for r in
+               self.db.execute("SELECT key, content FROM brief WHERE idea_uuid=?", (uid,))}
+        self._default_sections(uid, old, now_ms())
+        self.db.commit()
+        return self.sections(uid)
+
+    def add_section(self, uid, title="", after=None):
+        """새 칸. after(칸 uuid) 가 있으면 그 바로 아래, 없으면 맨 아래."""
+        rows = self.sections(uid)
+        pos = (rows[-1]["position"] + 1) if rows else 1.0
+        if after:
+            for i, r in enumerate(rows):
+                if r["uuid"] == after:
+                    nxt = rows[i + 1]["position"] if i + 1 < len(rows) else r["position"] + 2
+                    pos = (r["position"] + nxt) / 2
+                    break
+        sid = str(uuid.uuid4())
+        self.db.execute("""INSERT INTO sections(uuid, idea_uuid, key, title, content, position, updated_at)
+                           VALUES(?,?,NULL,?,'',?,?)""", (sid, uid, title, pos, now_ms()))
+        self.db.commit()
+        return sid
+
+    def update_section(self, sid, title=None, content=None):
+        fields = {}
+        if title is not None:
+            fields["title"] = title
+        if content is not None:
+            fields["content"] = content
+        if fields:
+            cols = ", ".join("%s=?" % k for k in fields)
+            self.db.execute("UPDATE sections SET %s, updated_at=? WHERE uuid=?" % cols,
+                            list(fields.values()) + [now_ms(), sid])
+            self.db.commit()
+
+    def append_to_section(self, sid, text):
+        row = self.db.execute("SELECT content FROM sections WHERE uuid=?", (sid,)).fetchone()
+        if row is not None:
+            cur = row["content"].rstrip()
+            self.update_section(sid, content=(cur + "\n" + text) if cur else text)
+
+    def delete_section(self, sid):
+        self.db.execute("UPDATE sections SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), sid))
+        self.db.commit()
+
+    def move_section(self, sid, step):
+        """step = -1 위로, +1 아래로 (옆 칸과 자리 바꿈)."""
+        row = self.db.execute("SELECT idea_uuid FROM sections WHERE uuid=?", (sid,)).fetchone()
+        if row is None:
+            return
+        rows = self.sections(row["idea_uuid"])
+        idx = next(i for i, r in enumerate(rows) if r["uuid"] == sid)
+        j = idx + step
+        if not 0 <= j < len(rows):
+            return
+        t = now_ms()
+        a, b = rows[idx], rows[j]
+        self.db.execute("UPDATE sections SET position=?, updated_at=? WHERE uuid=?", (b["position"], t, a["uuid"]))
+        self.db.execute("UPDATE sections SET position=?, updated_at=? WHERE uuid=?", (a["position"], t, b["uuid"]))
+        self.db.commit()
+
+    # ---------- 메모 ----------
+    def memos(self, uid):
+        return self.db.execute("SELECT * FROM memos WHERE idea_uuid=? AND deleted=0 ORDER BY created_at",
+                               (uid,)).fetchall()
+
+    def add_memo(self, uid, body):
+        mid = str(uuid.uuid4())
+        t = now_ms()
+        self.db.execute("INSERT INTO memos(uuid, idea_uuid, body, created_at, updated_at) VALUES(?,?,?,?,?)",
+                        (mid, uid, body, t, t))
+        self.db.commit()
+        return mid
+
+    def update_memo(self, mid, body):
+        self.db.execute("UPDATE memos SET body=?, updated_at=? WHERE uuid=?", (body, now_ms(), mid))
+        self.db.commit()
+
+    def delete_memo(self, mid):
+        self.db.execute("UPDATE memos SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), mid))
+        self.db.commit()
+
+    # ---------- 필요한 기능 ----------
+    def features(self, uid):
+        return self.db.execute("SELECT * FROM features WHERE idea_uuid=? AND deleted=0 ORDER BY position",
+                               (uid,)).fetchall()
+
+    def add_feature(self, uid, text, priority=FEATURE_PRIORITIES[0]):
+        row = self.db.execute("SELECT MAX(position) FROM features WHERE idea_uuid=?", (uid,)).fetchone()
+        pos = (row[0] or 0) + 1
+        fid = str(uuid.uuid4())
+        t = now_ms()
+        self.db.execute("""INSERT INTO features(uuid, idea_uuid, text, priority, position, created_at, updated_at)
+                           VALUES(?,?,?,?,?,?,?)""", (fid, uid, text, priority, pos, t, t))
+        self.db.commit()
+        return fid
+
+    def update_feature(self, fid, **fields):
+        bad = set(fields) - {"text", "priority", "done"}
+        if bad:
+            raise ValueError("모르는 항목: %s" % ", ".join(sorted(bad)))
+        if fields:
+            cols = ", ".join("%s=?" % k for k in fields)
+            self.db.execute("UPDATE features SET %s, updated_at=? WHERE uuid=?" % cols,
+                            list(fields.values()) + [now_ms(), fid])
+            self.db.commit()
+
+    def delete_feature(self, fid):
+        self.db.execute("UPDATE features SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), fid))
+        self.db.commit()
+
+    def move_feature(self, fid, step):
+        """같은 중요도 묶음 안에서 위(-1)·아래(+1) 칸과 자리 바꿈."""
+        row = self.db.execute("SELECT idea_uuid, priority FROM features WHERE uuid=?", (fid,)).fetchone()
+        if row is None:
+            return
+        rows = [r for r in self.features(row["idea_uuid"]) if r["priority"] == row["priority"]]
+        idx = next(i for i, r in enumerate(rows) if r["uuid"] == fid)
+        j = idx + step
+        if not 0 <= j < len(rows):
+            return
+        t = now_ms()
+        a, b = rows[idx], rows[j]
+        self.db.execute("UPDATE features SET position=?, updated_at=? WHERE uuid=?", (b["position"], t, a["uuid"]))
+        self.db.execute("UPDATE features SET position=?, updated_at=? WHERE uuid=?", (a["position"], t, b["uuid"]))
+        self.db.commit()
+
+    # ---------- 링크 (클로드 세션 등) ----------
+    def links(self, uid):
+        return self.db.execute("SELECT * FROM links WHERE idea_uuid=? AND deleted=0 ORDER BY created_at",
+                               (uid,)).fetchall()
+
+    def add_link(self, uid, url, label=""):
+        lid = str(uuid.uuid4())
+        t = now_ms()
+        self.db.execute("INSERT INTO links(uuid, idea_uuid, label, url, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                        (lid, uid, label.strip(), url.strip(), t, t))
+        self.db.commit()
+        return lid
+
+    def update_link(self, lid, label=None, url=None):
+        fields = {k: v.strip() for k, v in (("label", label), ("url", url)) if v is not None}
+        if fields:
+            cols = ", ".join("%s=?" % k for k in fields)
+            self.db.execute("UPDATE links SET %s, updated_at=? WHERE uuid=?" % cols,
+                            list(fields.values()) + [now_ms(), lid])
+            self.db.commit()
+
+    def delete_link(self, lid):
+        self.db.execute("UPDATE links SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), lid))
+        self.db.commit()
+
+    # ---------- 백업 ----------
+    def backup_to(self, path):
+        """지금 데이터 전체를 다른 파일로 복사 (쓰는 중이어도 안전한 SQLite 백업)."""
+        dst = sqlite3.connect(path)
+        try:
+            self.db.backup(dst)
+        finally:
+            dst.close()
+
+    # ---------- 다른 파일(예전 데이터·백업·다른 PC)과 합치기 ----------
+    MERGE_TABLES = (("ideas", ("uuid",)), ("sections", ("uuid",)), ("memos", ("uuid",)),
+                    ("features", ("uuid",)), ("links", ("uuid",)), ("brief", ("idea_uuid", "key")))
+
+    def merge_from(self, path):
+        """path 의 데이터를 지금 데이터에 합친다. 없는 건 추가, 둘 다 있으면 더 최근에 고친 쪽(updated_at)이 남음.
+        예전 버전 파일이라 없는 칸·표가 있어도 됨. 돌려주는 값: (추가 수, 바뀐 수)"""
+        src = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+        src.row_factory = sqlite3.Row
+        added = changed = 0
+        try:
+            src_tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "ideas" not in src_tables:
+                raise ValueError("아이디어 보드 데이터 파일이 아니에요.")
+            for table, keys in self.MERGE_TABLES:
+                if table not in src_tables:
+                    continue
+                dst_cols = [r["name"] for r in self.db.execute("PRAGMA table_info(%s)" % table)]
+                src_cols = {r["name"] for r in src.execute("PRAGMA table_info(%s)" % table)}
+                cols = [c for c in dst_cols if c in src_cols]
+                where = " AND ".join("%s=?" % k for k in keys)
+                for row in src.execute("SELECT %s FROM %s" % (", ".join(cols), table)):
+                    key_vals = [row[k] for k in keys]
+                    cur = self.db.execute("SELECT updated_at FROM %s WHERE %s" % (table, where), key_vals).fetchone()
+                    if cur is None:
+                        self.db.execute("INSERT INTO %s(%s) VALUES(%s)" % (table, ", ".join(cols), ",".join("?" * len(cols))),
+                                        [row[c] for c in cols])
+                        added += 1
+                    elif row["updated_at"] > cur["updated_at"]:
+                        sets = [c for c in cols if c not in keys]
+                        self.db.execute("UPDATE %s SET %s WHERE %s" % (table, ", ".join("%s=?" % c for c in sets), where),
+                                        [row[c] for c in sets] + key_vals)
+                        changed += 1
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        finally:
+            src.close()
+        return added, changed
+
+    def idea_count(self):
+        return self.db.execute("SELECT COUNT(*) FROM ideas WHERE deleted=0").fetchone()[0]
