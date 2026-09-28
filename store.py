@@ -112,7 +112,8 @@ CREATE INDEX IF NOT EXISTS links_idea ON links(idea_uuid, created_at);
 FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 
 # 저장 파일 구조 번호 (PRAGMA user_version). 1 = v1.0.0 (용도·필요한 기능·링크까지)
-SCHEMA_VERSION = 1
+# 2 = v1.2.1 (동기화 표마다 pc_seen: PC가 그 행을 받거나 합친 시각 → 폰 여러 대가 서로의 변경을 놓치지 않게)
+SCHEMA_VERSION = 2
 
 
 def now_ms():
@@ -149,6 +150,9 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(ideas)")}
         if "category" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+        for t in self.SYNC_TABLES:
+            if "pc_seen" not in {r["name"] for r in self.db.execute("PRAGMA table_info(%s)" % t)}:
+                self.db.execute("ALTER TABLE %s ADD COLUMN pc_seen INTEGER NOT NULL DEFAULT 0" % t)
         if ver < SCHEMA_VERSION:
             self.db.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
 
@@ -434,13 +438,17 @@ class Store:
         if cur is None:
             self.db.execute("INSERT INTO %s(%s) VALUES(%s)" % (table, ", ".join(cols), ",".join("?" * len(cols))),
                             [row[c] for c in cols])
-            return "added"
-        if row["updated_at"] > cur["updated_at"]:
+            result = "added"
+        elif row["updated_at"] > cur["updated_at"]:
             sets = [c for c in cols if c not in keys]
             self.db.execute("UPDATE %s SET %s WHERE %s" % (table, ", ".join("%s=?" % c for c in sets), where),
                             [row[c] for c in sets] + key_vals)
-            return "changed"
-        return None
+            result = "changed"
+        else:
+            return None
+        if table in self.SYNC_TABLES:     # 다른 폰이 '지난번 뒤 바뀐 것'으로 받아가게 PC 시각을 찍어 둠
+            self.db.execute("UPDATE %s SET pc_seen=? WHERE %s" % (table, where), [now_ms()] + key_vals)
+        return result
 
     def idea_count(self):
         return self.db.execute("SELECT COUNT(*) FROM ideas WHERE deleted=0").fetchone()[0]
@@ -476,5 +484,7 @@ class Store:
         for (uid,) in self.db.execute("""SELECT uuid FROM ideas i WHERE deleted=0 AND NOT EXISTS
                                          (SELECT 1 FROM sections s WHERE s.idea_uuid=i.uuid)""").fetchall():
             self.sections(uid)
-        return {t: [dict(r) for r in self.db.execute("SELECT * FROM %s WHERE updated_at > ?" % t, (since,))]
+        # updated_at 은 고친 기기의 시각, pc_seen 은 PC가 받은 시각. 밖에서 적은 뒤 늦게 들어온 것도 놓치지 않게 둘 다 봄
+        return {t: [dict(r) for r in self.db.execute("SELECT * FROM %s WHERE updated_at > ? OR pc_seen > ?" % t,
+                                                     (since, since))]
                 for t in self.SYNC_TABLES}
