@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 import datadir
 import store
+import sync
 import theme
 from version import VERSION
 from brief import BriefView
@@ -30,6 +31,7 @@ from gantt import GanttWindow
 import export
 from features import FeatureView
 from links import LinkButton
+from phone import PhoneDialog
 from memos import MemoView
 from store import QUADRANTS, STATUSES, quadrant
 
@@ -367,6 +369,8 @@ class Sidebar(QWidget):
         am.addSection("아이디어 보드 v%s" % VERSION)
         am.addAction("모든 아이디어 내보내기 (마크다운)…", lambda: self.appAction.emit("export_all"))
         am.addAction("백업 파일 만들기…", lambda: self.appAction.emit("backup"))
+        am.addAction("폰 연결 (와이파이 동기화)…", lambda: self.appAction.emit("phone"))
+        am.addSeparator()
         am.addAction("예전 데이터·백업 가져오기 (합치기)…", lambda: self.appAction.emit("import"))
         am.addSeparator()
         am.addAction("데이터 폴더 열기", lambda: self.appAction.emit("data_dir"))
@@ -860,6 +864,13 @@ class MainWindow(QMainWindow):
         self.settings_path = os.path.join(data_dir, "settings.json")
         self.settings = self._load_settings()
         self.gantt = None
+        # 폰 동기화 서버: 연결된 폰이 있을 때만 켜 둠 (없으면 '폰 연결' 창을 열 때 켬 → 방화벽 창도 그때만)
+        self.sync = sync.SyncServer(os.path.join(data_dir, "sync.json"), self._sync_handle)
+        if self.sync.devices():
+            self.sync.start()
+        self._sync_timer = QTimer(self, interval=200)
+        self._sync_timer.timeout.connect(self.sync.poll)
+        self._sync_timer.start()
 
         self.sidebar = Sidebar(self.store)
         self.dashboard = DashboardPage(self.store)
@@ -964,8 +975,34 @@ class MainWindow(QMainWindow):
             export.backup(self, self.store)
         elif what == "import":
             self.import_data()
+        elif what == "phone":
+            self.open_phone()
         elif what == "data_dir":
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.data_dir))
+
+    # ---------- 폰 동기화 ----------
+    def open_phone(self):
+        if not self.sync.running:
+            self.sync.start()
+        PhoneDialog(self.sync, self).exec()
+
+    def _sync_handle(self, req):
+        """폰이 보낸 변경을 합치고, 지난번 뒤로 PC에서 바뀐 것을 돌려줌 (메인 스레드에서 실행)."""
+        self.page.flush()
+        n, touched = self.store.apply_changes(req.get("changes") or {})
+        out = self.store.changes_since(int(req.get("since") or 0))
+        server_time = store.now_ms()
+        if n:
+            self._after_remote_change(touched)
+        return {"ok": True, "changes": out, "server_time": server_time, "applied": n}
+
+    def _after_remote_change(self, touched):
+        self.sidebar.refresh(self.sidebar.current())
+        if self.stack.currentWidget() is self.page and self.page.uid in touched:
+            self.open_idea(self.page.uid)       # 지워졌으면 대시보드로
+        elif self.stack.currentWidget() is self.dashboard:
+            self.dashboard.refresh()
+        self._refresh_gantt()
 
     def import_data(self):
         """다른 ideas.db(예전 폴더·백업·다른 PC)를 지금 데이터에 합친다."""
@@ -1034,6 +1071,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, ev):
         self.page.flush()
+        self.sync.stop()
         self._save_settings()
         super().closeEvent(ev)
 

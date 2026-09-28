@@ -414,19 +414,10 @@ class Store:
                 dst_cols = [r["name"] for r in self.db.execute("PRAGMA table_info(%s)" % table)]
                 src_cols = {r["name"] for r in src.execute("PRAGMA table_info(%s)" % table)}
                 cols = [c for c in dst_cols if c in src_cols]
-                where = " AND ".join("%s=?" % k for k in keys)
                 for row in src.execute("SELECT %s FROM %s" % (", ".join(cols), table)):
-                    key_vals = [row[k] for k in keys]
-                    cur = self.db.execute("SELECT updated_at FROM %s WHERE %s" % (table, where), key_vals).fetchone()
-                    if cur is None:
-                        self.db.execute("INSERT INTO %s(%s) VALUES(%s)" % (table, ", ".join(cols), ",".join("?" * len(cols))),
-                                        [row[c] for c in cols])
-                        added += 1
-                    elif row["updated_at"] > cur["updated_at"]:
-                        sets = [c for c in cols if c not in keys]
-                        self.db.execute("UPDATE %s SET %s WHERE %s" % (table, ", ".join("%s=?" % c for c in sets), where),
-                                        [row[c] for c in sets] + key_vals)
-                        changed += 1
+                    r = self._merge_row(table, keys, cols, row)
+                    added += r == "added"
+                    changed += r == "changed"
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -435,5 +426,55 @@ class Store:
             src.close()
         return added, changed
 
+    def _merge_row(self, table, keys, cols, row):
+        """행 하나 합치기: 없으면 추가, 있으면 더 최근에 고친 쪽이 남음. 돌려주는 값: 'added' | 'changed' | None"""
+        where = " AND ".join("%s=?" % k for k in keys)
+        key_vals = [row[k] for k in keys]
+        cur = self.db.execute("SELECT updated_at FROM %s WHERE %s" % (table, where), key_vals).fetchone()
+        if cur is None:
+            self.db.execute("INSERT INTO %s(%s) VALUES(%s)" % (table, ", ".join(cols), ",".join("?" * len(cols))),
+                            [row[c] for c in cols])
+            return "added"
+        if row["updated_at"] > cur["updated_at"]:
+            sets = [c for c in cols if c not in keys]
+            self.db.execute("UPDATE %s SET %s WHERE %s" % (table, ", ".join("%s=?" % c for c in sets), where),
+                            [row[c] for c in sets] + key_vals)
+            return "changed"
+        return None
+
     def idea_count(self):
         return self.db.execute("SELECT COUNT(*) FROM ideas WHERE deleted=0").fetchone()[0]
+
+    # ---------- 폰 동기화 ----------
+    SYNC_TABLES = ("ideas", "sections", "memos", "features", "links")
+
+    def apply_changes(self, changes):
+        """폰에서 온 {표 이름: [행…]} 합치기. 돌려주는 값: (바뀐 행 수, 영향 받은 아이디어 uuid 집합)"""
+        n, touched = 0, set()
+        try:
+            for table in self.SYNC_TABLES:
+                rows = changes.get(table) or []
+                if not rows:
+                    continue
+                dst_cols = [r["name"] for r in self.db.execute("PRAGMA table_info(%s)" % table)]
+                for row in rows:
+                    if not isinstance(row, dict) or "uuid" not in row or "updated_at" not in row:
+                        continue
+                    cols = [c for c in dst_cols if c in row]     # 모르는 칸은 무시
+                    if self._merge_row(table, ("uuid",), cols, row):
+                        n += 1
+                        touched.add(row["uuid"] if table == "ideas" else row.get("idea_uuid"))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return n, touched
+
+    def changes_since(self, since):
+        """since(밀리초) 뒤에 바뀐 행 전부 {표 이름: [행 dict…]} (지운 것 포함)."""
+        # 아주 옛날 파일이라 기획서 칸이 아직 없는 아이디어는 칸을 만들어 둠 (폰에도 가게)
+        for (uid,) in self.db.execute("""SELECT uuid FROM ideas i WHERE deleted=0 AND NOT EXISTS
+                                         (SELECT 1 FROM sections s WHERE s.idea_uuid=i.uuid)""").fetchall():
+            self.sections(uid)
+        return {t: [dict(r) for r in self.db.execute("SELECT * FROM %s WHERE updated_at > ?" % t, (since,))]
+                for t in self.SYNC_TABLES}
