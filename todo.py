@@ -12,7 +12,7 @@ from PySide6.QtGui import QBrush, QColor, QFont, QKeySequence, QLinearGradient, 
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGraphicsDropShadowEffect,
     QGraphicsObject, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMenu, QMessageBox, QPlainTextEdit,
-    QPushButton, QVBoxLayout,
+    QPushButton, QSlider, QVBoxLayout,
 )
 
 import theme
@@ -277,7 +277,20 @@ class TodoWindow(QDialog):
         self.hide_done.toggled.connect(self.refresh)
         self.count = QLabel()
         self.count.setStyleSheet("color:%s;" % theme.TEXT_DIM)
-        hint = QLabel("끌어서 붙이기 · ○ 끝냄 · 더블클릭 고치기 · 우클릭 메뉴 · Del 삭제 · Ctrl+휠 확대")
+        # 투명도·항상 위: 다른 창 위에 반투명하게 띄워 두고 보기
+        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity.setRange(30, 100)
+        self.opacity.setValue(100)
+        self.opacity.setFixedWidth(110)
+        self.opacity.setToolTip("창 투명도")
+        self.opacity_label = QLabel("100%")
+        self.opacity_label.setFixedWidth(38)
+        self.opacity.valueChanged.connect(self._set_opacity)
+        self.on_top = QCheckBox("📌 항상 위")
+        self.on_top.setToolTip("다른 프로그램 위에 늘 떠 있기")
+        self.on_top.toggled.connect(self._set_on_top)
+        hint = QLabel("ⓘ 사용법")
+        hint.setToolTip("끌어서 붙이기 · ○ 끝냄 · 더블클릭 고치기 · 우클릭 메뉴 · Del 삭제 · Ctrl+휠 확대 · Ctrl+N 새 할일")
         hint.setStyleSheet("color:%s;" % theme.TEXT_DIM)
         bar = QHBoxLayout()
         bar.addWidget(add)
@@ -287,6 +300,13 @@ class TodoWindow(QDialog):
         bar.addSpacing(10)
         bar.addWidget(self.count)
         bar.addStretch(1)
+        op = QLabel("투명도")
+        op.setStyleSheet("color:%s;" % theme.TEXT_DIM)
+        bar.addWidget(op)
+        bar.addWidget(self.opacity)
+        bar.addWidget(self.opacity_label)
+        bar.addWidget(self.on_top)
+        bar.addSpacing(12)
         bar.addWidget(hint)
 
         self.scene = QGraphicsScene(self)
@@ -300,6 +320,26 @@ class TodoWindow(QDialog):
 
         QShortcut(QKeySequence("Ctrl+N"), self, self.new)
         QShortcut(QKeySequence(Qt.Key_Delete), self, self.delete_selected)
+
+    # ---------- 투명도·항상 위 ----------
+    def _set_opacity(self, v):
+        self.setWindowOpacity(v / 100.0)
+        self.opacity_label.setText("%d%%" % v)
+
+    def _set_on_top(self, on):
+        if bool(self.windowFlags() & Qt.WindowStaysOnTopHint) == on:
+            return
+        was_visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)     # 창 속성을 바꾸면 잠깐 숨겨지므로 다시 보이기
+        if was_visible:
+            self.show()
+
+    def view_prefs(self):
+        return {"opacity": self.opacity.value(), "on_top": self.on_top.isChecked()}
+
+    def apply_prefs(self, prefs):
+        self.opacity.setValue(int(prefs.get("opacity", 100)))
+        self.on_top.setChecked(bool(prefs.get("on_top", False)))
 
     # ---------- 그리기 ----------
     def refresh(self):

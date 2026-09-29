@@ -993,7 +993,9 @@ class MainWindow(QMainWindow):
     # ---------- 할일 ----------
     def open_todos(self):
         if self.todo_win is None:
-            self.todo_win = TodoWindow(self.store, self)
+            self.todo_win = TodoWindow(self.store)          # 부모 없음 = 본 창과 따로 최소화·이동
+            self.todo_win.setWindowIcon(self.windowIcon())
+            self.todo_win.apply_prefs(self.settings.get("todo_view", {}))
             self.todo_win.changed.connect(self._todos_changed_from_window)
             self.todo_win.openIdea.connect(self._open_from_gantt)
             geo = self.settings.get("todo_geometry")
@@ -1017,7 +1019,8 @@ class MainWindow(QMainWindow):
 
     def open_gantt(self):
         if self.gantt is None:
-            self.gantt = GanttWindow(self.store, self)
+            self.gantt = GanttWindow(self.store)            # 부모 없음 = 본 창과 따로 최소화·이동
+            self.gantt.setWindowIcon(self.windowIcon())
             self.gantt.opened.connect(self._open_from_gantt)
             self.gantt.changed.connect(self._gantt_dates_changed)
             geo = self.settings.get("gantt_geometry")
@@ -1057,6 +1060,9 @@ class MainWindow(QMainWindow):
         self.page.flush()
         self.sync.stop()
         self._save_settings()
+        for win in (self.gantt, self.todo_win):      # 따로 떠 있는 창도 같이 닫기
+            if win is not None:
+                win.close()
         super().closeEvent(ev)
 
     def _save_settings(self):
@@ -1065,6 +1071,8 @@ class MainWindow(QMainWindow):
         self.settings["maximized"] = self.isMaximized()
         self.settings["sidebar_width"] = self.split.sizes()[0]
         self.settings["list_view"] = self.sidebar.view_state()
+        if self.todo_win is not None:
+            self.settings["todo_view"] = self.todo_win.view_prefs()
         for key, win in (("gantt_geometry", self.gantt), ("todo_geometry", self.todo_win)):
             if win is not None:
                 gg = win.normalGeometry() if win.isMaximized() else win.geometry()
