@@ -54,7 +54,7 @@ class PhoneDialog(QDialog):
         self.code.setText(s.code)
         lines = []
         if s.error:
-            lines.append("<span style='color:%s'>⚠ %s</span>" % (theme.DANGER, s.error))
+            lines.append("<span style='color:%s'>%s</span>" % (theme.DANGER, s.error))
         else:
             lines.append("이 PC: <b>%s</b> (%s)" % (s.config["name"], local_ip()))
         devs = s.devices()

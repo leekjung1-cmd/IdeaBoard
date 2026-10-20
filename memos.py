@@ -72,7 +72,7 @@ class MemoBubble(QFrame):
         self.body_text = row["body"]
         self.sections = sections        # () -> [(칸 uuid, 제목)]
         self.setObjectName("memo")
-        self.setStyleSheet("#memo { background:#2a2b2e; border:1px solid %s; border-radius:8px; }" % theme.BORDER)
+        self.setStyleSheet("#memo { background:%s; border:1px solid %s; border-radius:8px; }" % (theme.CHIP, theme.BORDER))
 
         edited = row["updated_at"] - row["created_at"] > 1000
         self.time = QLabel(time_text(_dt(row["created_at"])) + ("  · 고침" if edited else ""))
@@ -271,11 +271,11 @@ class MemoView(QWidget):
         elif what == "to_section":
             sid, title = value
             self.store.append_to_section(sid, body)
-            self._flash("✓ 기획서 '%s' 칸에 넣었어요." % title)
+            self._flash("기획서 '%s' 칸에 넣음" % title)
             self.sectionFilled.emit(sid, False)
         elif what == "to_feature":
             self.featureRequested.emit(body)
-            self._flash("✓ '필요한 기능' 목록(필수)에 넣었어요.")
+            self._flash("'필요한 기능'(필수)에 넣음")
         elif what == "new_section":
             sid = self.store.add_section(self.uid, "")
             self.store.update_section(sid, content=body)

@@ -50,6 +50,7 @@ def main():
         "--name", "IdeaBoard", "--windowed", "--noconfirm", "--clean",
         "--icon", os.path.join(SRC, "app.ico"),
         "--exclude-module", "tkinter",
+        "--add-data", os.path.join(SRC, "fonts") + os.pathsep + "fonts",     # 화면 글꼴 (Noto Sans KR, OFL)
         "--version-file", version_file(),
         "--distpath", dist, "--workpath", os.path.join(WORK, "build"), "--specpath", WORK,
     ], check=True)

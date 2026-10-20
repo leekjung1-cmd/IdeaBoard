@@ -3,12 +3,13 @@
 클로드 앱 세션 링크: claude://claude.ai/epitaxy/local_... (그 세션이 있는 PC에서만 열림)
 클로드 웹 대화: https://claude.ai/chat/...
 """
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QMenu, QMessageBox, QToolButton, QVBoxLayout,
 )
 
+import icons
 import theme
 
 HINT = ("클로드 세션 링크를 붙여넣으세요.\n"
@@ -77,7 +78,9 @@ class LinkButton(QToolButton):
     def load(self, uid):
         self.uid = uid
         n = len(self.store.links(uid))
-        self.setText("🔗 클로드 세션 %d" % n if n else "🔗 클로드 세션 연결")
+        self.setText("클로드 세션 %d" % n if n else "클로드 세션 연결")
+        self.setIcon(icons.icon("link", theme.TEXT_DIM))
+        self.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
     def _build(self):
         m = self.menu_
@@ -85,11 +88,11 @@ class LinkButton(QToolButton):
         links = self.store.links(self.uid)
         for l in links:
             name = l["label"] or l["url"]
-            a = m.addAction("↗  " + name, lambda url=l["url"]: self.open(url))
+            a = m.addAction(icons.icon("expand"), name, lambda url=l["url"]: self.open(url))
             a.setToolTip(l["url"])
         if links:
             m.addSeparator()
-        m.addAction("＋ 세션 링크 추가…", self._add)
+        m.addAction(icons.icon("plus"), "세션 링크 추가…", self._add)
         if links:
             edit = m.addMenu("고치기")
             rm = m.addMenu("지우기")

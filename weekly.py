@@ -52,7 +52,7 @@ class ReviewDialog(QDialog):
     def __init__(self, store_, parent=None):
         super().__init__(parent)
         self.store = store_
-        self.setWindowTitle("🗓 주간 점검")
+        self.setWindowTitle("주간 점검")
         self.resize(720, 640)
         rows = stale_ideas(store_)
         head = QLabel("<b>일주일 넘게 손 안 댄 아이디어 %d개</b><br>"
@@ -77,14 +77,14 @@ class ReviewDialog(QDialog):
             cl.addWidget(t)
             row = QHBoxLayout()
             g = QButtonGroup(card)
-            for i, label in enumerate(("▶ 계속", "⏸ 보류", "🗑 버리기")):
+            for i, label in enumerate(("계속", "보류", "버리기")):
                 b = QRadioButton(label)
                 g.addButton(b, i)
                 row.addWidget(b)
             row.addStretch(1)
             cl.addLayout(row)
             step = QLineEdit(r["next_step"])
-            step.setPlaceholderText("👣 계속한다면 다음 한 걸음 (30분 안에 끝낼 것)")
+            step.setPlaceholderText("다음 한 걸음 (30분 안에 끝낼 것)")
             step.setVisible(False)
             cl.addWidget(step)
             g.idToggled.connect(lambda i, on, step=step: on and (step.setVisible(i == 0), i == 0 and step.setFocus()))
@@ -92,7 +92,7 @@ class ReviewDialog(QDialog):
             lay.addWidget(card)
             self.items.append((r, g, step))
         if not rows:
-            e = QLabel("멈춘 아이디어가 없어요. 이번 주 잘했어요! 🎉")
+            e = QLabel("멈춘 아이디어 없음")
             e.setAlignment(Qt.AlignCenter)
             e.setStyleSheet("color:%s; padding:40px;" % theme.TEXT_DIM)
             lay.addWidget(e)
@@ -223,10 +223,10 @@ class ShortsDialog(QDialog):
     def __init__(self, store_, parent=None):
         super().__init__(parent)
         self.store = store_
-        self.setWindowTitle("🎬 쇼츠 소재 모아보기")
+        self.setWindowTitle("쇼츠 소재")
         self.resize(640, 560)
         rows = [r for r in store_.ideas() if r["shorts"]]
-        head = QLabel("<b>쇼츠 소재 %d개</b> &nbsp;<span style='color:%s'>아이디어 화면 위 '🎬 쇼츠'를 켜면 여기 모여요. "
+        head = QLabel("<b>쇼츠 소재 %d개</b> &nbsp;<span style='color:%s'>아이디어 화면 위 '쇼츠'를 켜면 여기 모여요. "
                       "누르면 그 아이디어가 열려요.</span>" % (len(rows), theme.TEXT_DIM))
         head.setWordWrap(True)
         self.list = QListWidget()
@@ -239,7 +239,7 @@ class ShortsDialog(QDialog):
             it.setData(Qt.UserRole, r["uuid"])
             self.list.addItem(it)
         if not rows:
-            self.list.addItem("아직 없어요. 영상으로 만들 만한 아이디어(여행, 장비 등)에서 '🎬 쇼츠'를 켜 보세요.")
+            self.list.addItem("아직 없어요. 영상으로 만들 만한 아이디어(여행, 장비 등)에서 '쇼츠'를 켜 보세요.")
         self.list.itemDoubleClicked.connect(self._open)
         self.list.itemClicked.connect(self._open)
         copy = QPushButton("모두 복사 (마크다운)")
@@ -303,7 +303,7 @@ class IdeaPool(QListWidget):
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(QPen(QColor(theme.ACCENT), 1.5))
         p.setBrush(QColor(theme.ITEM_SEL))
-        p.drawRoundedRect(QRect(1, 1, w - 2, 26), 8, 8)
+        p.drawRoundedRect(QRect(1, 1, w - 2, 26), theme.r(8), theme.r(8))
         p.setPen(QColor(theme.TEXT))
         p.drawText(QRect(10, 0, w - 16, 28), Qt.AlignVCenter, fm.elidedText(it.text(), Qt.ElideRight, w - 16))
         p.end()
@@ -337,7 +337,7 @@ class SlotCell(QFrame):
         if r is not None:
             text = "<b>%s</b>" % (r["title"] or "(제목 없음)")
             if r["next_step"]:
-                text += "<br><span style='color:%s'>👣 %s</span>" % (theme.TEXT_DIM, r["next_step"])
+                text += "<br><span style='color:%s'>→ %s</span>" % (theme.TEXT_DIM, r["next_step"])
             self.label.setText(text)
             self.setToolTip("누르면 열기 · 오른쪽 클릭으로 비우기 · 다른 칸으로 끌어 옮기기")
         else:
@@ -396,7 +396,7 @@ class TimetableWindow(QWidget):
     def __init__(self, store_, parent=None):
         super().__init__(parent)
         self.store = store_
-        self.setWindowTitle("▥ 주간 시간표")
+        self.setWindowTitle("주간 시간표")
         self.resize(1000, 520)
         hint = QLabel("평일 밤 9시 반부터 30분씩. 왼쪽 아이디어를 칸에 끌어다 놓으면 그 시간에 할 일이 돼요. "
                       "칸은 다음 한 걸음(30분)과 짝이에요. 매주 같은 시간표로 쓰여요.")
@@ -448,9 +448,9 @@ class TimetableWindow(QWidget):
         rows.sort(key=lambda r: (r["status"] != ACTIVE, -r["activity"]))
         self.pool.clear()
         for r in rows:
-            it = QListWidgetItem(("▶ " if r["status"] == ACTIVE else "") + (r["title"] or "(제목 없음)"))
+            it = QListWidgetItem(r["title"] or "(제목 없음)")
             it.setData(Qt.UserRole, r["uuid"])
-            it.setToolTip("👣 " + r["next_step"] if r["next_step"] else "끌어서 시간표 칸에 놓기")
+            it.setToolTip("→ " + r["next_step"] if r["next_step"] else "끌어서 시간표 칸에 놓기")
             if r["status"] == ACTIVE:
                 it.setForeground(QColor(theme.ACCENT))
             self.pool.addItem(it)

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
+import icons
 import theme
 from store import ACTIVE, ACTIVE_LIMIT
 
@@ -61,11 +62,11 @@ class RoomDialog(QDialog):
             hl.setContentsMargins(10, 6, 6, 6)
             text = "<b>%s</b>" % (r["title"] or "(제목 없음)")
             if r["next_step"]:
-                text += "<br><span style='color:%s'>👣 %s</span>" % (theme.TEXT_DIM, r["next_step"])
+                text += "<br><span style='color:%s'>→ %s</span>" % (theme.TEXT_DIM, r["next_step"])
             lb = QLabel(text)
             lb.setWordWrap(True)
             hl.addWidget(lb, 1)
-            for st, label in (("완료", "✓ 완료"), ("보류", "⏸ 보류")):
+            for st, label in (("완료", "완료"), ("보류", "보류")):
                 b = QPushButton(label)
                 b.clicked.connect(lambda _c=False, uid=r["uuid"], st=st: self._set(uid, st))
                 hl.addWidget(b)
@@ -98,7 +99,7 @@ class NextStepBar(QFrame):
         self.store = store_
         self.uid = None
         self.setObjectName("stepBar")
-        icon = QLabel("👣 다음 한 걸음")
+        icon = QLabel("다음 한 걸음")
         f = icon.font()
         f.setBold(True)
         icon.setFont(f)
@@ -107,7 +108,8 @@ class NextStepBar(QFrame):
         self.edit.textEdited.connect(lambda _t: self._timer.start())
         self.edit.editingFinished.connect(self.flush)
         self.edit.returnPressed.connect(self.flush)
-        self.done_btn = QPushButton("✓ 했어요")
+        self.done_btn = QPushButton(" 했어요")
+        self.done_btn.setIcon(icons.icon("check"))
         self.done_btn.setToolTip("끝냈으면 누르세요. 메모에 기록하고 다음 한 걸음을 새로 적게 해요.")
         self.done_btn.clicked.connect(self._done)
         self.note = QLabel()
@@ -158,7 +160,7 @@ class NextStepBar(QFrame):
         self.edit.clear()
         self.edit.setPlaceholderText("잘했어요! 다음 한 걸음은? " + STEP_HINT)
         self.edit.setFocus()
-        self._style(note="✓ '%s' 끝! 메모에 기록했어요. 이어서 할 다음 한 걸음을 적어 두세요." % step, good=True)
+        self._style(note="'%s' 끝 — 메모에 남김. 다음 한 걸음을 적어 두세요." % step, good=True)
         self._note_timer.start()
         self.finished.emit(self.uid)
         self.changed.emit(self.uid)
@@ -172,7 +174,7 @@ class NextStepBar(QFrame):
         self.setStyleSheet("#stepBar { background:%s; border:1px solid %s; border-radius:10px; }" % (theme.PANEL, border))
         self.done_btn.setEnabled(not empty)
         if note is None and warn:
-            note = "진행 중인데 다음 한 걸음이 비어 있어요. 30분 안에 할 수 있는 걸로 하나만 적어 보세요."
+            note = "진행 중인데 다음 한 걸음이 비어 있어요."
         self.note.setVisible(bool(note))
         if note:
             self.note.setText(note)

@@ -140,9 +140,9 @@ class GanttCanvas(QWidget):
         while d <= last:
             x = self.x_of(d)
             if d.weekday() >= 5:
-                p.fillRect(QRectF(x, HEAD_H, self.day_w, h), QColor(255, 255, 255, 7))
+                p.fillRect(QRectF(x, HEAD_H, self.day_w, h), QColor(theme.ALT))
             if d.day == 1:
-                p.setPen(QPen(QColor("#4a4a4a"), 1))
+                p.setPen(QPen(QColor(theme.TEXT_OFF), 1))
             elif self.day_w >= 14 or d.weekday() == 0:
                 p.setPen(QPen(QColor(theme.BORDER), 1, Qt.DotLine))
             else:
@@ -152,7 +152,7 @@ class GanttCanvas(QWidget):
             d += timedelta(days=1)
         # 오늘 칸
         tx = self.x_of(today)
-        p.fillRect(QRectF(tx, HEAD_H, self.day_w, h), _rgba(theme.DANGER, 22))
+        p.fillRect(QRectF(tx, HEAD_H, self.day_w, h), _rgba(theme.ACCENT, 26))
 
         # 줄
         for i, r in enumerate(self.rows):
@@ -161,7 +161,7 @@ class GanttCanvas(QWidget):
                 continue
             if i == self.hover:
                 p.fillRect(QRectF(LEFT_W, y, w - LEFT_W, ROW_H), QColor(theme.ITEM_HOVER))
-            p.setPen(QPen(QColor("#2c2c2c"), 1))
+            p.setPen(QPen(QColor(theme.LINE), 1))
             p.drawLine(QPointF(LEFT_W, y + ROW_H), QPointF(w, y + ROW_H))
             if self.edit and self.edit["row"] == i:
                 self._draw_bar(p, r, y, today, self.edit["s"], self.edit["e"], editing=True)
@@ -210,7 +210,7 @@ class GanttCanvas(QWidget):
                     if p.fontMetrics().horizontalAdvance(label) + 10 > x2 - x1:
                         label = ""
                 p.drawText(QRectF(x1 + 6, 2, max(0, x2 - x1 - 8), 20), Qt.AlignVCenter | Qt.AlignLeft, label)
-                p.setPen(QPen(QColor("#4a4a4a"), 1))
+                p.setPen(QPen(QColor(theme.TEXT_OFF), 1))
                 p.drawLine(QPointF(self.x_of(d), 0), QPointF(self.x_of(d), HEAD_H))
             d = nxt
 
@@ -222,17 +222,17 @@ class GanttCanvas(QWidget):
             x = self.x_of(d)
             if every == 1 or d.weekday() == 0:
                 if d == today:
-                    col = theme.DANGER
+                    col = theme.ON_ACCENT
                 elif d.weekday() == 6:
-                    col = "#e07a7a"
+                    col = theme.QUAD[1]
                 elif d.weekday() == 5:
-                    col = "#7aa7e0"
+                    col = theme.QUAD[2]
                 else:
                     col = theme.TEXT_DIM
                 if d == today:
                     p.setPen(Qt.NoPen)
-                    p.setBrush(_rgba(theme.DANGER, 60))
-                    p.drawRoundedRect(QRectF(x + 1, 22, max(self.day_w, 22) - 2, HEAD_H - 24), 4, 4)
+                    p.setBrush(QColor(theme.ACCENT))
+                    p.drawRoundedRect(QRectF(x + 1, 22, max(self.day_w, 22) - 2, HEAD_H - 24), theme.r(4), theme.r(4))
                 p.setPen(QColor(col))
                 cw = max(self.day_w, 22)
                 p.drawText(QRectF(x, 22, cw, 18), Qt.AlignCenter, str(d.day))
@@ -282,7 +282,7 @@ class GanttCanvas(QWidget):
         if not editing:
             s, e = _d(r["start_date"]), _d(r["due_date"])
         q = quadrant(r["importance"], r["urgency"])
-        col = QColor(theme.QUAD[q] if q else "#8b949e")
+        col = QColor(theme.QUAD[q] if q else theme.QUAD[4])
         done = r["status"] == "완료"
         paused = r["status"] == "보류"
         if done or paused:
@@ -307,7 +307,7 @@ class GanttCanvas(QWidget):
             fill = QColor(col)
             fill.setAlpha(min(col.alpha(), 170))
             overdue = not done and e < today
-            p.setPen(QPen(QColor("#ffffff"), 2) if editing else
+            p.setPen(QPen(QColor(theme.TEXT), 2) if editing else
                      QPen(QColor(theme.DANGER), 2) if overdue else QPen(col, 1.2))
             p.setBrush(fill)
             p.drawPath(path)
@@ -315,11 +315,11 @@ class GanttCanvas(QWidget):
             p.setPen(QPen(col.lighter(130), 2.5))
             p.drawLine(QPointF(x1, cy - bh / 2 - 3), QPointF(x1, cy + bh / 2 + 3))
             days = (e - s).days + 1
-            text = "%s → %s · %d일%s" % (s.strftime("%m/%d"), e.strftime("%m/%d"), days, "  ✓" if done else "")
+            text = "%s → %s · %d일%s" % (s.strftime("%m/%d"), e.strftime("%m/%d"), days, "  · 완료" if done else "")
             tw = fm.horizontalAdvance(text)
             tx1 = max(x1, LEFT_W)       # 막대가 왼쪽 밖에서 시작하면 보이는 곳부터 글씨
             if tw + 16 < x2 - tx1 - head:
-                p.setPen(QColor("#ffffff"))
+                p.setPen(QColor("#ffffff" if theme.DARK else theme.TEXT))
                 p.drawText(QRectF(tx1 + 8, cy - 10, x2 - tx1 - head - 8, 20), Qt.AlignVCenter | Qt.AlignLeft, text)
             else:
                 p.setPen(QColor(theme.TEXT_DIM))
@@ -531,7 +531,7 @@ class GanttWindow(QDialog):
         today = QPushButton("오늘로")
         today.clicked.connect(self.canvas.go_today)
         zin = QPushButton("+")
-        zout = QPushButton("−")
+        zout = QPushButton("-")
         for b, f, tip in ((zin, 1.3, "크게 (Ctrl+휠)"), (zout, 1 / 1.3, "작게 (Ctrl+휠)")):
             b.setFixedWidth(34)
             b.setToolTip(tip)

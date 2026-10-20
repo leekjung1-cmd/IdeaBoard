@@ -66,7 +66,7 @@ class FeatureRow(QWidget):
         self.criteria = None
         if dev:     # 개발 프로젝트: 다 됐는지 확인하는 법
             self.criteria = QLineEdit(row["criteria"])
-            self.criteria.setPlaceholderText("✔ 다 됐는지 확인하는 법 (예: 폰에서 적은 게 PC에도 뜬다)")
+            self.criteria.setPlaceholderText("확인하는 법 — 폰에서 적은 게 PC에도 뜬다")
             self.criteria.setToolTip("완성 기준: 이 기능이 다 됐는지 직접 확인하는 방법")
             cf = self.criteria.font()
             cf.setPointSize(max(8, cf.pointSize() - 1))

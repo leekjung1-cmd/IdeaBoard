@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QTextEdit, QToolButton, QVBoxLayout, QWidget,
 )
 
+import icons
 import theme
 from store import BRIEF_FIELDS, DEV_SECTIONS, LEGACY_BRIEF_FIELDS
 
@@ -174,10 +175,11 @@ class BriefView(QWidget):
             self.widgets.append(w)
             lay.addWidget(w)
         if not rows:
-            empty = QLabel("칸이 없어요. 아래 ＋ 칸 추가로 만들어요.")
+            empty = QLabel("칸 없음")
             empty.setStyleSheet("color:%s; padding:10px 2px;" % theme.TEXT_DIM)
             lay.addWidget(empty)
-        add = QPushButton("＋  칸 추가")
+        add = QPushButton(" 칸 추가")
+        add.setIcon(icons.icon("plus", theme.TEXT_DIM))
         add.setToolTip("제목과 내용을 직접 정하는 새 칸")
         add.setStyleSheet("QPushButton { border:1px dashed %s; background:transparent; padding:8px; color:%s; }"
                           "QPushButton:hover { border-color:%s; color:%s; }"

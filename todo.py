@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSlider, QVBoxLayout,
 )
 
+import icons
 import theme
 from store import TODO_COLORS
 from widgets import DateField
@@ -22,7 +23,7 @@ from widgets import DateField
 NOTE_W, NOTE_H = 200, 180
 GAP_X, GAP_Y = 36, 40
 MARGIN = 40
-PAPER = {"yellow": "#f7e27a", "pink": "#f5a9bc", "green": "#b0e3a6", "blue": "#a7cff3", "orange": "#f7c58a", "purple": "#cfbaf2"}
+PAPER = {"yellow": "#f1df8f", "pink": "#eebcc8", "green": "#c3dfb6", "blue": "#b9d3ea", "orange": "#f0c99e", "purple": "#d4c8ec"}
 NAMES = {"yellow": "노랑", "pink": "분홍", "green": "초록", "blue": "파랑", "orange": "주황", "purple": "보라"}
 INK = QColor("#2b2b2b")
 
@@ -39,18 +40,13 @@ def dday(due):
 
 
 def wall_tile():
-    """어두운 코르크 느낌 바탕 (한 번 만들어 반복)."""
-    pm = QPixmap(240, 240)
-    pm.fill(QColor("#3a3027"))
+    """벽 바탕: 테마 바탕색 위 옅은 점 격자 (한 번 만들어 반복)."""
+    pm = QPixmap(24, 24)
+    pm.fill(QColor(theme.WINDOW))
     p = QPainter(pm)
-    rnd = random.Random(7)
-    for _ in range(2600):
-        c = QColor(rnd.choice(["#4a3d30", "#2f261e", "#45382b", "#524332", "#2a221b"]))
-        c.setAlpha(rnd.randint(90, 200))
-        p.setPen(Qt.NoPen)
-        p.setBrush(c)
-        r = rnd.uniform(0.6, 1.8)
-        p.drawEllipse(QPointF(rnd.uniform(0, 240), rnd.uniform(0, 240)), r, r)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(theme.BORDER))
+    p.drawRect(QRectF(11, 11, 1.5, 1.5))
     p.end()
     return pm
 
@@ -65,14 +61,11 @@ class NoteItem(QGraphicsObject):
         self.setFlags(QGraphicsObject.ItemIsMovable | QGraphicsObject.ItemIsSelectable)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.OpenHandCursor)
-        tilt = (zlib.crc32(self.tid.encode()) % 700) / 100.0 - 3.5     # 포스트잇마다 조금씩 다르게 기울기
-        self.setTransformOriginPoint(NOTE_W / 2, NOTE_H / 2)
-        self.setRotation(tilt * 0.8)
-        self.setOpacity(0.72 if self.done else 1.0)
+        self.setOpacity(0.6 if self.done else 1.0)
         shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(18)
-        shadow.setOffset(4, 7)
-        shadow.setColor(QColor(0, 0, 0, 160))
+        shadow.setBlurRadius(10)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 90 if theme.DARK else 30))
         self.setGraphicsEffect(shadow)
         self._press_pos = None
 
@@ -85,21 +78,9 @@ class NoteItem(QGraphicsObject):
     def paint(self, p, _opt, _w):
         p.setRenderHint(QPainter.Antialiasing)
         base = QColor(PAPER.get(self.row["color"], PAPER["yellow"]))
-        g = QLinearGradient(0, 0, 0, NOTE_H)
-        g.setColorAt(0, base.lighter(108))
-        g.setColorAt(1, base.darker(104))
-        p.setPen(QPen(base.darker(125), 0.8) if not self.isSelected() else QPen(QColor(theme.ACCENT), 2.5))
-        p.setBrush(QBrush(g))
-        # 오른쪽 아래가 살짝 말린 종이
-        paper = QPolygonF([QPointF(0, 0), QPointF(NOTE_W, 0), QPointF(NOTE_W, NOTE_H - 16),
-                           QPointF(NOTE_W - 16, NOTE_H), QPointF(0, NOTE_H)])
-        p.drawPolygon(paper)
-        p.setPen(Qt.NoPen)
-        p.setBrush(base.darker(118))
-        p.drawPolygon(QPolygonF([QPointF(NOTE_W, NOTE_H - 16), QPointF(NOTE_W - 16, NOTE_H), QPointF(NOTE_W - 14, NOTE_H - 14)]))
-        # 테이프
-        p.setBrush(QColor(255, 255, 255, 105))
-        p.drawRect(QRectF(NOTE_W / 2 - 34, -10, 68, 22))
+        p.setPen(QPen(base.darker(115), 1) if not self.isSelected() else QPen(QColor(theme.ACCENT), 2.5))
+        p.setBrush(base)
+        p.drawRoundedRect(QRectF(0, 0, NOTE_W, NOTE_H), theme.r(6), theme.r(6))
 
         # 끝냄 동그라미
         cr = self.check_rect()
@@ -138,13 +119,13 @@ class NoteItem(QGraphicsObject):
             f2.setBold(True)
             p.setFont(f2)
             p.drawText(QRectF(14, y, NOTE_W - 28, 18), Qt.AlignLeft | Qt.AlignVCenter,
-                       "⏰ %s  (%s)" % (label, self.row["due_date"][5:].replace("-", "/")))
+                       "%s  ·  %s" % (label, self.row["due_date"][5:].replace("-", "/")))
             p.setFont(small)
         if self.row["idea_title"]:
             p.setPen(QColor("#5a5a5a"))
             fm = p.fontMetrics()
             p.drawText(QRectF(14, y + 18, NOTE_W - 36, 18), Qt.AlignLeft | Qt.AlignVCenter,
-                       fm.elidedText("💡 " + self.row["idea_title"], Qt.ElideRight, NOTE_W - 36))
+                       fm.elidedText(self.row["idea_title"], Qt.ElideRight, NOTE_W - 36))
 
     # ---------- 마우스 ----------
     def hoverEnterEvent(self, ev):
@@ -266,7 +247,8 @@ class TodoWindow(QDialog):
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         self.resize(1100, 720)
 
-        add = QPushButton("＋  새 할일")
+        add = QPushButton(" 새 할일")
+        add.setIcon(icons.icon("plus"))
         add.setStyleSheet("QPushButton { font-weight:bold; }")
         add.setToolTip("Ctrl+N")
         add.clicked.connect(self.new)
@@ -286,11 +268,11 @@ class TodoWindow(QDialog):
         self.opacity_label = QLabel("100%")
         self.opacity_label.setFixedWidth(38)
         self.opacity.valueChanged.connect(self._set_opacity)
-        self.on_top = QCheckBox("📌 항상 위")
+        self.on_top = QCheckBox("항상 위")
         self.on_top.setToolTip("다른 프로그램 위에 늘 떠 있기")
         self.on_top.toggled.connect(self._set_on_top)
-        hint = QLabel("ⓘ 사용법")
-        hint.setToolTip("끌어서 붙이기 · ○ 끝냄 · 더블클릭 고치기 · 우클릭 메뉴 · Del 삭제 · Ctrl+휠 확대 · Ctrl+N 새 할일")
+        hint = QLabel("사용법")
+        hint.setToolTip("끌어서 붙이기 · 오른쪽 위 동그라미 = 끝냄 · 더블클릭 고치기 · 우클릭 메뉴 · Del 삭제 · Ctrl+휠 확대 · Ctrl+N 새 할일")
         hint.setStyleSheet("color:%s;" % theme.TEXT_DIM)
         bar = QHBoxLayout()
         bar.addWidget(add)
@@ -365,8 +347,8 @@ class TodoWindow(QDialog):
         open_n = sum(1 for r in rows if not r["done"])
         self.count.setText("할일 %d개 · 끝낸 것 %d개" % (open_n, len(rows) - open_n))
         if not rows:
-            t = self.scene.addText("아직 할일이 없어요.\n＋ 새 할일로 첫 포스트잇을 붙여보세요.")
-            t.setDefaultTextColor(QColor("#d8cbb8"))
+            t = self.scene.addText("할일 없음")
+            t.setDefaultTextColor(QColor(theme.TEXT_DIM))
             f = QFont(self.font())
             f.setPointSize(14)
             t.setFont(f)
@@ -463,7 +445,7 @@ class TodoWindow(QDialog):
             return
         m = QMenu(self)
         m.addAction("고치기", lambda: self.edit(tid))
-        m.addAction("다시 할 것으로" if it.done else "끝냄 ✓", lambda: self.toggle_done(tid, not it.done))
+        m.addAction("다시 할 것으로" if it.done else "끝냄", lambda: self.toggle_done(tid, not it.done))
         colors = m.addMenu("색 바꾸기")
         for c in TODO_COLORS:
             a = colors.addAction(NAMES[c], lambda c=c: self.set_color(tid, c))

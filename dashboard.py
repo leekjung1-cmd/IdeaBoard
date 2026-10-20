@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import icons
 import theme
 from todo import PAPER, dday as todo_dday
 from store import ACTIVE, ACTIVE_LIMIT, HIGH, QUADRANTS, STATUSES, quadrant
@@ -128,7 +129,7 @@ class MatrixChart(QWidget):
             for r in shown:
                 text = r["title"] or "(제목 없음)"
                 if r["next_step"]:
-                    text = max(text, "👣 " + r["next_step"], key=len)
+                    text = max(text, "→ " + r["next_step"], key=len)
                 w = self._chip_width(text, cell.width())
                 h = chip_h(r)
                 self.chips.append(Chip(QRect(cell.center().x() - w // 2, y, w, h), row=r))
@@ -173,7 +174,7 @@ class MatrixChart(QWidget):
             4: QRectF(plot.left(), split_y, split_x - plot.left(), plot.bottom() - split_y),
         }
         for q, r in regions.items():
-            p.fillRect(r, _rgba(theme.QUAD[q], 26))
+            p.fillRect(r, _rgba(theme.QUAD[q], 18 if theme.DARK else 14))
         # 사분면 이름 (바깥쪽 모서리)
         f = QFont(self.font())
         f.setBold(True)
@@ -193,7 +194,7 @@ class MatrixChart(QWidget):
             y = plot.top() + (i - 0.5) * ch
             p.drawLine(QPoint(int(x), plot.top()), QPoint(int(x), plot.bottom()))
             p.drawLine(QPoint(plot.left(), int(y)), QPoint(plot.right(), int(y)))
-        p.setPen(QPen(QColor("#6a6a6a"), 1.5))
+        p.setPen(QPen(QColor(theme.TEXT_OFF if theme.DARK else theme.STRONG), 1.5))
         p.drawLine(QPoint(int(split_x), plot.top()), QPoint(int(split_x), plot.bottom()))
         p.drawLine(QPoint(plot.left(), int(split_y)), QPoint(plot.right(), int(split_y)))
         p.setPen(QPen(QColor(theme.BORDER), 1))
@@ -209,16 +210,15 @@ class MatrixChart(QWidget):
             p.drawText(QRectF(plot.left() - 26, cy - 9, 20, 18), Qt.AlignRight | Qt.AlignVCenter, str(i))
         p.setPen(QColor(theme.TEXT))
         p.drawText(QRectF(plot.left(), plot.bottom() + 22, plot.width(), 20), Qt.AlignCenter, "중요도  →")
-        p.drawText(QRectF(0, plot.center().y() - 22, plot.left() - 24, 44), Qt.AlignCenter, "↑\n긴급도")
+        p.drawText(QRectF(0, plot.center().y() - 22, plot.left() - 24, 44), Qt.AlignCenter, "긴급도\n↑")
 
         # 미분류 칸
         tray = self.tray_rect()
         p.setPen(QPen(QColor(theme.BORDER), 1, Qt.DashLine))
-        p.setBrush(QColor(255, 255, 255, 6))
-        p.drawRoundedRect(tray, 8, 8)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(tray, theme.r(8), theme.r(8))
         p.setPen(QColor(theme.TEXT_DIM))
-        p.drawText(tray.adjusted(12, 6, -12, 0), Qt.AlignLeft | Qt.AlignTop,
-                   "미분류 — 중요도·긴급도 안 정함 (칩을 여기로 끌어오면 둘 다 지워요)")
+        p.drawText(tray.adjusted(12, 6, -12, 0), Qt.AlignLeft | Qt.AlignTop, "미분류")
 
         # 끄는 중이면 놓일 자리 강조
         target = self.target_at(self.drag_pos) if self.drag_pos is not None else None
@@ -226,7 +226,7 @@ class MatrixChart(QWidget):
             r = tray if target == ("tray",) else self.cell_rect(*target)
             p.setPen(QPen(QColor(theme.ACCENT), 2))
             p.setBrush(_rgba(theme.ACCENT, 30))
-            p.drawRoundedRect(QRectF(r).adjusted(2, 2, -2, -2), 6, 6)
+            p.drawRoundedRect(QRectF(r).adjusted(2, 2, -2, -2), theme.r(6), theme.r(6))
 
         dragging = self.press[0] if (self.press and self.drag_pos is not None) else None
         for c in self.chips:
@@ -245,7 +245,7 @@ class MatrixChart(QWidget):
         if c.more is not None:
             p.setPen(QPen(QColor(theme.BORDER), 1))
             p.setBrush(QColor(theme.ITEM_HOVER if hover else theme.PANEL))
-            p.drawRoundedRect(QRectF(rect), CHIP_H / 2, CHIP_H / 2)
+            p.drawRoundedRect(QRectF(rect), theme.pill(CHIP_H), theme.pill(CHIP_H))
             p.setPen(QColor(theme.TEXT_DIM))
             p.drawText(rect, Qt.AlignCenter, "+%d개 더" % len(c.more))
             p.restore()
@@ -256,9 +256,9 @@ class MatrixChart(QWidget):
         active = r["status"] == ACTIVE
         p.setPen(QPen(QColor(theme.ACCENT) if active and not hover else _rgba(col, 230 if hover else 150),
                       1.8 if active else 1.2))
-        p.setBrush(QColor(theme.ITEM_SEL if hover else "#2a2b2e"))
+        p.setBrush(QColor(theme.ITEM_SEL if hover else theme.CHIP))
         two = rect.height() > CHIP_H
-        radius = 9 if two else CHIP_H / 2
+        radius = theme.r(9) if two else theme.pill(CHIP_H)
         p.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
         top = QRect(rect.left(), rect.top() + (2 if two else 0), rect.width(), CHIP_H - (4 if two else 0))
         dot = QRectF(rect.left() + 9, top.center().y() - 3.5, 8, 8)
@@ -277,7 +277,7 @@ class MatrixChart(QWidget):
             p.setFont(f)
             p.setPen(QColor(theme.TEXT_DIM))
             p.drawText(sr, Qt.AlignVCenter | Qt.AlignLeft,
-                       QFontMetrics(f).elidedText("👣 " + r["next_step"], Qt.ElideRight, sr.width()))
+                       QFontMetrics(f).elidedText("→ " + r["next_step"], Qt.ElideRight, sr.width()))
         if r["due_date"] and r["due_date"] <= date.today().isoformat():     # 목표일 오늘이거나 지남
             p.setPen(QPen(QColor(theme.BASE), 1.5))
             p.setBrush(QColor(theme.DANGER))
@@ -348,7 +348,7 @@ class MatrixChart(QWidget):
                 if r["summary"]:
                     lines.append(r["summary"])
                 if r["next_step"]:
-                    lines.append("👣 다음 한 걸음: " + r["next_step"])
+                    lines.append("다음 한 걸음: " + r["next_step"])
                 info = "상태: %s" % r["status"] + ("  ·  분류: %s" % r["category"] if r["category"] else "")
                 if r["importance"] is not None:
                     info += "  ·  중요도 %d  ·  긴급도 %d" % (r["importance"], r["urgency"])
@@ -399,7 +399,7 @@ class ScheduleRow(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("#srow { border-radius:6px; } #srow:hover { background:%s; }" % theme.ITEM_HOVER)
         q = quadrant(row["importance"], row["urgency"])
-        dot = QLabel("●")
+        dot = QLabel("●" if not theme.SQUARE else "■")
         dot.setStyleSheet("color:%s;" % theme.QUAD[q])
         title = QLabel(row["title"] or "(제목 없음)")
         title.setMinimumWidth(10)
@@ -425,11 +425,11 @@ class ScheduleRow(QFrame):
             self._step = QLabel()
             self._step.setMinimumWidth(10)
             self._step.setStyleSheet("color:%s;" % theme.TEXT)
-            self._step_full = "👣 " + row["next_step"]
+            self._step_full = "→ " + row["next_step"]
             self._step.setToolTip(self._step_full)
             lay.addWidget(self._step)
         elif step and row["status"] == ACTIVE:
-            warn = QLabel("👣 다음 한 걸음을 적어 주세요")
+            warn = QLabel("→ 다음 한 걸음 비어 있음")
             warn.setStyleSheet("color:%s;" % theme.QUAD[3])
             lay.addWidget(warn)
         self._title = title
@@ -459,7 +459,9 @@ class SchedulePanel(QFrame):
         self.setObjectName("sched")
         self.setStyleSheet("#sched { background:%s; border:1px solid %s; border-radius:10px; }"
                            % (theme.SIDEBAR, theme.BORDER))
-        head = QPushButton("일정   ⤢ 일정표")
+        head = QPushButton("일정")
+        head.setIcon(icons.icon("expand", theme.TEXT_DIM, 14))
+        head.setLayoutDirection(Qt.RightToLeft)
         head.setToolTip("달력 위에 시작→목표 막대로 크게 보기 (Ctrl+T)")
         head.setCursor(Qt.PointingHandCursor)
         f = head.font()
@@ -520,7 +522,7 @@ class SchedulePanel(QFrame):
 
         # 오늘 밤 시간표
         if tonight:
-            link("오늘 밤  ⤢ 시간표", self.timetableRequested, "주간 시간표 열기")
+            link("오늘 밤", self.timetableRequested, "주간 시간표 열기")
             for t, r in tonight:
                 w = ScheduleRow({"uuid": r["idea_uuid"], "title": r["title"], "importance": r["importance"],
                                  "urgency": r["urgency"], "next_step": r["next_step"], "status": r["status"]},
@@ -567,7 +569,7 @@ class SchedulePanel(QFrame):
         stale = sorted((r for r in rows if r["status"] != "보류" and ago(r["activity"], today)[0] >= STALE_DAYS),
                        key=lambda r: r["activity"])
         if stale:
-            link("오래 손 안 댄 것  ⤢ 주간 점검", self.reviewRequested, "멈춘 아이디어를 계속 / 보류 / 버리기로 정리")
+            link("오래 손 안 댄 것", self.reviewRequested, "주간 점검 열기: 멈춘 아이디어를 계속 / 보류 / 버리기로 정리")
             for r in stale[:8]:
                 n, _t, c = ago(r["activity"], today)
                 last = datetime.fromtimestamp(r["activity"] / 1000).strftime("%m/%d")
@@ -604,7 +606,7 @@ class TodoRow(QFrame):
         self.text = QLabel()
         self.text.setMinimumWidth(10)
         self._full = first
-        self.text.setToolTip(row["text"] + ("\n💡 " + row["idea_title"] if row["idea_title"] else ""))
+        self.text.setToolTip(row["text"] + ("\n아이디어: " + row["idea_title"] if row["idea_title"] else ""))
         if row["done"]:
             self.text.setStyleSheet("color:%s; text-decoration: line-through;" % theme.TEXT_DIM)
         label, col = todo_dday(row["due_date"])
@@ -637,7 +639,9 @@ class TodoPanel(QFrame):
         self.setStyleSheet("#todos { background:%s; border:1px solid %s; border-radius:10px; }"
                            % (theme.SIDEBAR, theme.BORDER))
         self.setToolTip("더블클릭하면 포스트잇 창이 열려요")
-        head = QPushButton("할일   ⤢ 포스트잇")
+        head = QPushButton("할일")
+        head.setIcon(icons.icon("expand", theme.TEXT_DIM, 14))
+        head.setLayoutDirection(Qt.RightToLeft)
         head.setToolTip("할일을 포스트잇 벽으로 크게 보기")
         head.setCursor(Qt.PointingHandCursor)
         f = head.font()
@@ -672,7 +676,7 @@ class TodoPanel(QFrame):
         for r in open_rows:
             lay.addWidget(TodoRow(r, lambda tid, on: self.toggled.emit(tid, on)))
         if not open_rows:
-            empty = QLabel("할일이 없어요.\n더블클릭해서 포스트잇을 붙여보세요." if not done_n else "다 끝냈어요 👏")
+            empty = QLabel("할일 없음" if not done_n else "다 끝냄")
             empty.setWordWrap(True)
             empty.setStyleSheet("color:%s; padding:8px 4px;" % theme.TEXT_DIM)
             lay.addWidget(empty)
@@ -756,12 +760,12 @@ class DashboardPage(QWidget):
         self.chart.set_rows(rows)
         self.schedule.fill(rows, tonight=weekly_tonight(self.store))
         self.todos.fill(self.store.todos())
-        self.note.setText("아이디어 %d개 (완료 제외) · 칩을 누르면 열리고, 끌어서 옮기면 중요도·긴급도가 바뀌어요. "
-                          "가운데 선이 3(보통), %d 이상이 '높음'." % (len(rows), HIGH))
+        self.note.setText("아이디어 %d개" % len(rows))
+        self.note.setToolTip("완료 제외. 칩을 누르면 열리고, 끌어서 옮기면 중요도·긴급도가 바뀌어요. "
+                             "가운데 선이 3(보통), %d 이상이 '높음'." % HIGH)
 
     def set_review_banner(self, show, n):
-        self.banner_text.setText("🗓 금요일 밤이에요. 멈춘 아이디어 %d개를 계속 / 보류 / 버리기로 정리할까요?" % n
-                                 if n else "🗓 금요일 밤이에요. 이번 주 멈춘 아이디어는 없어요. 진행 중인 것만 훑어볼까요?")
+        self.banner_text.setText("금요일 밤 — 멈춘 아이디어 %d개 정리할 시간" % n if n else "금요일 밤 — 이번 주 멈춘 아이디어 없음")
         self.banner.setVisible(show)
 
     def _todo_toggled(self, tid, done):

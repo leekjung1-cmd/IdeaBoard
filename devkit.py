@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 import export
+import icons
 import theme
 from store import ACTIVE, FEATURE_PRIORITIES, STATUSES
 
@@ -32,19 +33,19 @@ DEFAULT_RULES = """- 답은 한국어 반말로, 짧고 쉽게. 개발 용어는
 
 # (버튼 글자, 설명, 클로드에게 보낼 부탁 글)
 ASKS = [
-    ("💬  질문하면서 기획 다듬기",
+    ("질문하면서 기획 다듬기",
      "만들기 전에 정해야 할 것을 클로드가 하나씩 물어봐요",
      "아래는 내가 만들려는 앱·프로그램 아이디어야. 실제로 만들기 전에 정해야 할 것들을 나한테 질문해줘. "
      "한 번에 3개 이하로, 쉬운 말로 물어보고, 답을 다 들으면 기획서를 깔끔하게 정리해서 보여줘."),
-    ("✂  첫 버전 기능 골라주기",
+    ("첫 버전 기능 골라주기",
      "꼭 필요한 것만 남기고 나머지는 나중으로 나눠요",
      "아래 아이디어의 기능들을 보고, 첫 버전에 꼭 있어야 하는 최소한의 기능만 골라줘. "
      "나머지는 '2단계'와 '나중에'로 나누고, 왜 그렇게 나눴는지 한 줄씩 적어줘."),
-    ("🔍  빠진 것 찾기",
+    ("빠진 것 찾기",
      "나중에 문제될 만한 점을 미리 짚어줘요",
      "아래 기획에서 빠졌거나 나중에 문제될 만한 점을 찾아줘. 예를 들면 기록 저장·백업, 업데이트 때 예전 기록, "
      "실수로 지웠을 때, 폰·PC 사이 동기화, 처음 쓰는 사람이 헷갈릴 부분 같은 것. 중요한 순서로 짧게."),
-    ("🪜  만드는 순서와 확인 방법 짜기",
+    ("만드는 순서와 확인 방법 짜기",
      "단계별로 나누고, 단계마다 다 됐는지 확인하는 법을 적어줘요",
      "아래 아이디어를 만드는 순서를 단계(1단계, 2단계 …)로 나눠줘. 단계마다 만들 기능과, "
      "그 단계가 다 됐는지 내가 직접 확인할 수 있는 방법(예: '폰에서 적은 게 PC에 뜬다')을 적어줘."),
@@ -266,7 +267,8 @@ class DevView(QWidget):
         self.folder_info = _dim("")
         self.folder_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         cl.addWidget(self.folder_info)
-        self.start_btn = QPushButton("📁  개발 시작 — 폴더와 설명서 만들기")
+        self.start_btn = QPushButton(" 개발 시작 — 폴더와 설명서 만들기")
+        self.start_btn.setIcon(icons.icon("folder"))
         self.start_btn.clicked.connect(self.start)
         row = QHBoxLayout()
         self.open_btn = QPushButton("폴더 열기")

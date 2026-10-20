@@ -30,6 +30,7 @@ from brief import BriefView
 from dashboard import DashboardPage
 from devkit import DevView
 import focus
+import icons
 import weekly
 from gantt import GanttWindow
 import export
@@ -69,14 +70,14 @@ def make_icon():
         y = pad + (i // 2) * (s + gap)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(theme.QUAD[q]))
-        p.drawRoundedRect(x, y, s, s, 22, 22)
+        p.drawRoundedRect(x, y, s, s, theme.r(22), theme.r(22))
     p.end()
     return pm
 
 
 def quad_badge_style(q):
     c = QColor(theme.QUAD[q])
-    return ("QLabel {{ color:{fg}; background:rgba({r},{g},{b},40); border:1px solid rgba({r},{g},{b},140);"
+    return ("QLabel {{ color:{fg}; background:rgba({r},{g},{b},28); border:1px solid rgba({r},{g},{b},120);"
             " border-radius:10px; padding:2px 10px; }}").format(
         fg=theme.QUAD[q] if q else theme.TEXT_DIM, r=c.red(), g=c.green(), b=c.blue())
 
@@ -186,19 +187,19 @@ class NewIdeaDialog(QDialog):
         form.addRow("목표 완료일", self.due)
         self.next_step = QLineEdit()
         self.next_step.setPlaceholderText("30분 안에 끝낼 다음 행동 1개 (나중에 적어도 돼요)")
-        form.addRow("👣 다음 한 걸음", self.next_step)
-        self.dev = QCheckBox("💻  개발할 앱·프로그램이에요")
+        form.addRow("다음 한 걸음", self.next_step)
+        self.dev = QCheckBox("개발할 앱·프로그램")
+        self.dev.setIcon(icons.icon("code", theme.TEXT_DIM))
         self.dev.setToolTip("켜면 '개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
                             "기능마다 '확인하는 법' 칸이 생겨요. 나중에 아이디어 화면에서 켜고 꺼도 돼요.")
         form.addRow("", self.dev)
-        self.shorts = QCheckBox("🎬  쇼츠(짧은 영상) 소재로 쓸 만해요")
-        self.shorts.setToolTip("여행·장비처럼 영상으로 만들 수 있는 아이디어. ⋯ → 쇼츠 소재 모아보기에서 한 번에 봐요.")
+        self.shorts = QCheckBox("쇼츠 소재")
+        self.shorts.setIcon(icons.icon("film", theme.TEXT_DIM))
+        self.shorts.setToolTip("여행·장비처럼 짧은 영상으로 만들 수 있는 아이디어. 메뉴 → 쇼츠 소재 모아보기에서 한 번에 봐요.")
         form.addRow("", self.shorts)
 
-        hint = QLabel("중요도·긴급도가 %d 이상이면 '높음'으로 보고 대시보드 4분면에 놓아요.\n"
-                      "잘 모르겠으면 '미정'으로 두고 나중에 정해도 돼요.\n"
-                      "'진행 중'은 %d개까지만 둘 수 있어요. 새 아이디어는 보통 '보관함'에 넣어 두세요."
-                      % (store.HIGH, store.ACTIVE_LIMIT))
+        hint = QLabel("진행 중은 %d개까지. 나머지는 보관함에." % store.ACTIVE_LIMIT)
+        hint.setToolTip("중요도·긴급도가 %d 이상이면 '높음'으로 보고 대시보드 4분면에 놓아요. 모르겠으면 미정으로." % store.HIGH)
         hint.setStyleSheet("color:%s;" % theme.TEXT_DIM)
         hint.setWordWrap(True)
 
@@ -238,14 +239,17 @@ class IdeaDelegate(QStyledItemDelegate):
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
         r = option.rect.adjusted(6, 1, -6, -1)
-        if option.state & QStyle.State_Selected:
+        selected = bool(option.state & QStyle.State_Selected)
+        if selected and theme.SQUARE:       # 미니멀: 왼쪽 신호색 막대 + 굵은 글씨
+            p.fillRect(QRect(r.left(), r.top() + 3, 3, r.height() - 6), QColor(theme.ACCENT))
+        elif selected:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(theme.ITEM_SEL))
-            p.drawRoundedRect(r, 6, 6)
+            p.drawRoundedRect(r, theme.r(6), theme.r(6))
         elif option.state & QStyle.State_MouseOver:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(theme.ITEM_HOVER))
-            p.drawRoundedRect(r, 6, 6)
+            p.drawRoundedRect(r, theme.r(6), theme.r(6))
 
         q = index.data(QUAD_ROLE) or 0
         status = index.data(STATUS_ROLE) or ""
@@ -255,13 +259,13 @@ class IdeaDelegate(QStyledItemDelegate):
             if pick and not option.state & QStyle.State_MouseOver:
                 p.setPen(Qt.NoPen)
                 p.setBrush(QColor(theme.ITEM_SEL))
-                p.drawRoundedRect(r, 6, 6)
+                p.drawRoundedRect(r, theme.r(6), theme.r(6))
             box = QRect(x0, r.center().y() - 7, 14, 14)
             p.setPen(QPen(QColor(theme.ACCENT if pick else theme.TEXT_DIM), 1.4))
             p.setBrush(QColor(theme.ACCENT) if pick else Qt.NoBrush)
-            p.drawRoundedRect(box, 3, 3)
+            p.drawRoundedRect(box, theme.r(3), theme.r(3))
             if pick:
-                p.setPen(QPen(QColor("white"), 2))
+                p.setPen(QPen(QColor(theme.ON_ACCENT), 2))
                 p.drawLine(box.left() + 3, box.center().y(), box.left() + 6, box.bottom() - 3)
                 p.drawLine(box.left() + 6, box.bottom() - 3, box.right() - 3, box.top() + 3)
             x0 = box.right() + 9
@@ -288,21 +292,23 @@ class IdeaDelegate(QStyledItemDelegate):
             tag = QRect(right - cw, r.center().y() - 9, cw, 18)
             p.setPen(QPen(QColor(theme.BORDER), 1))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(tag, 9, 9)
+            p.drawRoundedRect(tag, theme.pill(18), theme.pill(18))
             p.setPen(QColor(theme.TEXT_DIM))
             p.drawText(tag, Qt.AlignCenter, cat)
             right -= cw + 8
 
         title = index.data(Qt.DisplayRole) or "(제목 없음)"
         left = dot.right() + 10
-        for role, mark in ((DEV_ROLE, "💻"), (SHORTS_ROLE, "🎬")):     # 개발 프로젝트 · 쇼츠 소재 표시
+        for role, mark in ((DEV_ROLE, "code"), (SHORTS_ROLE, "film")):     # 개발 프로젝트 · 쇼츠 소재 표시
             if index.data(role):
-                p.setPen(QColor(theme.TEXT_DIM))
-                ew = fm.horizontalAdvance(mark) + 4
-                p.drawText(QRect(left, r.top(), ew, r.height()), Qt.AlignVCenter | Qt.AlignLeft, mark)
-                left += ew + 2
+                icons.draw(p, mark, QRect(left, r.center().y() - 7, 14, 14), theme.TEXT_DIM)
+                left += 19
         tr = QRect(left, r.top(), right - left, r.height())
         done = status in ("완료", "보류")
+        if selected and theme.SQUARE:
+            bf = p.font()
+            bf.setBold(True)
+            p.setFont(bf)
         p.setPen(QColor(theme.TEXT_DIM if done else theme.TEXT))
         p.drawText(tr, Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(title, Qt.ElideRight, tr.width()))
         p.restore()
@@ -334,22 +340,27 @@ class Sidebar(QWidget):
             #sideBtn {{ text-align:left; padding:8px 12px; border:none; border-radius:6px; background:transparent; }}
             #sideBtn:hover {{ background:{hover}; }}
             #sideBtn:checked {{ background:{sel}; }}
-            #newBtn {{ text-align:left; padding:8px 12px; border-radius:6px; background:{panel};
-                       border:1px solid {border}; font-weight:bold; }}
-            #newBtn:hover {{ background:{hover}; border-color:{accent}; }}
+            #newBtn {{ text-align:left; padding:8px 12px; border-radius:6px; background:{newbg}; color:{newfg};
+                       border:1px solid {newborder}; font-weight:bold; }}
+            #newBtn:hover {{ background:{newhover}; border-color:{accent}; }}
             #sectionLabel {{ color:{dim}; padding:10px 14px 4px 14px; }}
         """.format(bg=theme.SIDEBAR, hover=theme.ITEM_HOVER, sel=theme.ITEM_SEL, panel=theme.PANEL,
-                   border=theme.BORDER, accent=theme.ACCENT, dim=theme.TEXT_DIM))
+                   border=theme.BORDER, accent=theme.ACCENT, dim=theme.TEXT_DIM,
+                   newbg=theme.STRONG if theme.SQUARE else theme.PANEL,
+                   newfg=theme.ON_ACCENT if theme.SQUARE else theme.TEXT,
+                   newborder=theme.STRONG if theme.SQUARE else theme.BORDER,
+                   newhover=theme.ACCENT if theme.SQUARE else theme.ITEM_HOVER))
 
-        name = QLabel("아이디어 보드")
+        name = QLabel("IDEA/BOARD" if theme.SQUARE else "아이디어 보드")
         f = name.font()
         f.setPointSize(13)
-        f.setBold(True)
+        f.setWeight(QFont.Black if theme.SQUARE else QFont.Bold)
+        f.setLetterSpacing(QFont.PercentageSpacing, 96)
         name.setFont(f)
         name.setContentsMargins(8, 4, 0, 6)
 
         self.app_menu_btn = QToolButton()
-        self.app_menu_btn.setText("⋯")
+        self.app_menu_btn.setIcon(icons.icon("more", theme.TEXT_DIM, 18))
         self.app_menu_btn.setToolTip("내보내기 · 백업")
         self.app_menu_btn.setPopupMode(QToolButton.InstantPopup)
         self.app_menu_btn.setStyleSheet("QToolButton { font-size:14pt; padding:0 8px; color:%s; } "
@@ -360,25 +371,34 @@ class Sidebar(QWidget):
         am.addAction("백업 파일 만들기…", lambda: self.appAction.emit("backup"))
         am.addAction("폰 연결 (와이파이 동기화)…", lambda: self.appAction.emit("phone"))
         am.addSeparator()
-        am.addAction("🎬 쇼츠 소재 모아보기…", lambda: self.appAction.emit("shorts"))
+        am.addAction(icons.icon("film"), "쇼츠 소재 모아보기…", lambda: self.appAction.emit("shorts"))
         am.addAction("분류 옮기기 (목표 기준으로)…", lambda: self.appAction.emit("categories"))
         am.addSeparator()
         am.addAction("예전 데이터·백업 가져오기 (합치기)…", lambda: self.appAction.emit("import"))
         am.addSeparator()
+        tm = am.addMenu("화면 모양")
+        cur = theme.MODE if theme.MODE in ("dark", "light") else "auto"
+        for key, label in (("auto", "윈도우 설정 따라가기"), ("dark", "다크 — 차분한 작업실"), ("light", "라이트 — 미니멀 그리드")):
+            a = tm.addAction(label, lambda key=key: self.appAction.emit("theme:" + key))
+            a.setCheckable(True)
+            a.setChecked(key == cur)
         am.addAction("데이터 폴더 열기", lambda: self.appAction.emit("data_dir"))
         self.app_menu_btn.setMenu(am)
 
-        self.new_btn = QPushButton("＋  새로운 아이디어")
+        self.new_btn = QPushButton("  새로운 아이디어")
+        self.new_btn.setIcon(icons.icon("plus", theme.ON_ACCENT if theme.SQUARE else theme.TEXT))
         self.new_btn.setObjectName("newBtn")
         self.new_btn.setToolTip("Ctrl+N")
         self.new_btn.clicked.connect(self.newRequested)
 
-        self.dash_btn = QPushButton("▦  대시보드")
+        self.dash_btn = QPushButton("  대시보드")
+        self.dash_btn.setIcon(icons.icon("grid", theme.TEXT_DIM))
         self.dash_btn.setObjectName("sideBtn")
         self.dash_btn.setCheckable(True)
         self.dash_btn.clicked.connect(self.dashboardRequested)
 
-        self.gantt_btn = QPushButton("▤  일정표")
+        self.gantt_btn = QPushButton("  일정표")
+        self.gantt_btn.setIcon(icons.icon("gantt", theme.TEXT_DIM))
         self.gantt_btn.setObjectName("sideBtn")
         self.gantt_btn.setToolTip("시작일→목표일을 달력 위 막대로 보기 (Ctrl+T)")
         self.gantt_btn.clicked.connect(self.ganttRequested)
@@ -389,11 +409,13 @@ class Sidebar(QWidget):
         self.todo_btn.clicked.connect(self.todosRequested)
         self.set_todo_count(0)
 
-        self.tt_btn = QPushButton("▥  주간 시간표")
+        self.tt_btn = QPushButton("  주간 시간표")
+        self.tt_btn.setIcon(icons.icon("table", theme.TEXT_DIM))
         self.tt_btn.setObjectName("sideBtn")
         self.tt_btn.setToolTip("평일 밤 9시 반부터 30분 칸에 아이디어 끌어다 놓기")
         self.tt_btn.clicked.connect(self.timetableRequested)
-        self.review_btn = QPushButton("🗓  주간 점검")
+        self.review_btn = QPushButton("  주간 점검")
+        self.review_btn.setIcon(icons.icon("review", theme.TEXT_DIM))
         self.review_btn.setObjectName("sideBtn")
         self.review_btn.setToolTip("멈춘 아이디어를 계속 / 보류 / 버리기로 정리 (금요일 밤 추천)")
         self.review_btn.clicked.connect(self.reviewRequested)
@@ -513,7 +535,8 @@ class Sidebar(QWidget):
         lay.addWidget(ver)
 
     def set_todo_count(self, n):
-        self.todo_btn.setText("☑  할일" + ("   %d" % n if n else ""))
+        self.todo_btn.setText("  할일" + ("   %d" % n if n else ""))
+        self.todo_btn.setIcon(icons.icon("check-square", theme.TEXT_DIM))
 
     def current(self):
         it = self.list.currentItem()
@@ -589,11 +612,11 @@ class Sidebar(QWidget):
             a.setChecked(cat not in self.hidden_cats)
             a.toggled.connect(lambda on, cat=cat: self._toggle_cat(cat, on))
         m.addSection("종류")
-        a = m.addAction("💻 개발 프로젝트만")
+        a = m.addAction("개발 프로젝트만")
         a.setCheckable(True)
         a.setChecked(self.dev_only)
         a.toggled.connect(lambda on: self._set_view(dev_only=on))
-        a = m.addAction("🎬 쇼츠 소재만")
+        a = m.addAction("쇼츠 소재만")
         a.setCheckable(True)
         a.setChecked(self.shorts_only)
         a.toggled.connect(lambda on: self._set_view(shorts_only=on))
@@ -787,7 +810,7 @@ class IdeaPage(QWidget):
                                    % (theme.TEXT_DIM, theme.BORDER, theme.ACCENT, theme.TEXT))
 
         more = QToolButton()
-        more.setText("⋯")
+        more.setIcon(icons.icon("more", theme.TEXT_DIM, 20))
         more.setToolTip("더 보기")
         more.setPopupMode(QToolButton.InstantPopup)
         mm = QMenu(more)
@@ -803,7 +826,9 @@ class IdeaPage(QWidget):
         self.link_btn.changed.connect(self.changed)
 
         self.dev_btn = QToolButton()
-        self.dev_btn.setText("💻 개발")
+        self.dev_btn.setText("개발")
+        self.dev_btn.setIcon(icons.icon("code", theme.TEXT_DIM))
+        self.dev_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.dev_btn.setCheckable(True)
         self.dev_btn.setToolTip("개발할 앱·프로그램이면 켜요.\n"
                                 "'개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
@@ -815,9 +840,11 @@ class IdeaPage(QWidget):
             % (theme.BORDER, theme.TEXT_DIM, theme.ACCENT, theme.ITEM_SEL, theme.ACCENT, theme.TEXT))
         self.dev_btn.toggled.connect(self._toggle_dev)
         self.shorts_btn = QToolButton()
-        self.shorts_btn.setText("🎬 쇼츠")
+        self.shorts_btn.setText("쇼츠")
+        self.shorts_btn.setIcon(icons.icon("film", theme.TEXT_DIM))
+        self.shorts_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.shorts_btn.setCheckable(True)
-        self.shorts_btn.setToolTip("영상(쇼츠)으로 만들 만한 소재면 켜요. ⋯ → 쇼츠 소재 모아보기에서 한 번에 봐요.")
+        self.shorts_btn.setToolTip("짧은 영상(쇼츠)으로 만들 만한 소재면 켜요. 메뉴 → 쇼츠 소재 모아보기에서 한 번에 봐요.")
         self.shorts_btn.setStyleSheet(self.dev_btn.styleSheet())
         self.shorts_btn.toggled.connect(self._toggle_shorts)
 
@@ -868,7 +895,7 @@ class IdeaPage(QWidget):
         self.devview = DevView(self.store, data_dir)
         self.devview.changed.connect(self._dev_changed)
         self.features.changed.connect(lambda _u: self.devview.refresh())
-        self.tabs.addTab(self.devview, "💻 개발")
+        self.tabs.addTab(self.devview, "개발")
         self.memos = MemoView(self.store, self.brief.section_titles)
         self.memos.changed.connect(self.changed)
         self.memos.countChanged.connect(
@@ -1295,6 +1322,10 @@ class MainWindow(QMainWindow):
             dlg.exec()
         elif what == "categories":
             self.move_categories()
+        elif what.startswith("theme:"):
+            self.settings["theme"] = what.split(":", 1)[1]
+            self._save_settings()
+            QMessageBox.information(self, "화면 모양", "프로그램을 다시 켜면 바뀌어요.")
         elif what == "data_dir":
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.data_dir))
 
@@ -1504,7 +1535,6 @@ def main():
     except Exception:
         pass
     app = QApplication(sys.argv)
-    app.setFont(QFont("Malgun Gothic", 10))
     theme.apply(app)
     app._popup_fix = PopupScreenFix(app)
     app.installEventFilter(app._popup_fix)
