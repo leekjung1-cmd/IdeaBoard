@@ -399,7 +399,7 @@ class ScheduleRow(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet("#srow { border-radius:6px; } #srow:hover { background:%s; }" % theme.ITEM_HOVER)
         q = quadrant(row["importance"], row["urgency"])
-        dot = QLabel("●" if not theme.SQUARE else "■")
+        dot = QLabel("●")
         dot.setStyleSheet("color:%s;" % theme.QUAD[q])
         title = QLabel(row["title"] or "(제목 없음)")
         title.setMinimumWidth(10)

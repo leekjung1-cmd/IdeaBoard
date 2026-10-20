@@ -14,6 +14,11 @@ import theme
 from store import ACTIVE, CATEGORIES, SLOTS, STATUSES, WEEKDAYS
 
 STALE_DAYS = 7
+# 고르기 단추: 알약 모양, 눌린 것만 신호색
+SEG_STYLE = ("QPushButton {{ border:1px solid {b}; border-radius:14px; padding:4px 16px; background:{bg}; }}"
+             "QPushButton:hover {{ border-color:{off}; }}"
+             "QPushButton:checked {{ background:{a}; color:{on}; border-color:{a}; font-weight:bold; }}").format(
+    b=theme.BORDER, bg=theme.BUTTON, off=theme.TEXT_OFF, a=theme.ACCENT, on=theme.ON_ACCENT)
 MIME = "application/x-ideaboard-idea"
 
 
@@ -77,8 +82,13 @@ class ReviewDialog(QDialog):
             cl.addWidget(t)
             row = QHBoxLayout()
             g = QButtonGroup(card)
+            g.setExclusive(True)
             for i, label in enumerate(("계속", "보류", "버리기")):
-                b = QRadioButton(label)
+                b = QPushButton(label)        # 고르기 단추 (눌린 것 하나만)
+                b.setObjectName("seg")
+                b.setStyleSheet(SEG_STYLE)
+                b.setCheckable(True)
+                b.setCursor(Qt.PointingHandCursor)
                 g.addButton(b, i)
                 row.addWidget(b)
             row.addStretch(1)

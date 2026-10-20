@@ -23,16 +23,16 @@ DARK = dict(
     SIDEBAR="#161513", ITEM_HOVER="#22211e", ITEM_SEL="#2b2a25", CHIP="#24231f", BUTTON_HOVER="#2e2c28",
     DANGER="#e07a5f", GOOD="#9db58a", STAR="#d4a85a", STRONG="#33312d",
     QUAD={1: "#d9735b", 2: "#86a9c4", 3: "#d4a85a", 4: "#8a867d", 0: "#5a5750"},
-    RADIUS=8, SQUARE=False, DARK=True,
+    RADIUS=10, SQUARE=False, MINIMAL=False, DARK=True, FIELD="#161513", BUTTON="#26251f",
 )
 LIGHT = dict(
-    WINDOW="#ffffff", BASE="#ffffff", ALT="#f6f6f6", PANEL="#f5f5f5", BORDER="#e2e2e2", LINE="#ececec",
-    TEXT="#111111", TEXT_DIM="#666666", TEXT_OFF="#a3a3a3",
+    WINDOW="#ffffff", BASE="#ffffff", ALT="#fafafa", PANEL="#f7f7f7", BORDER="#e6e6e6", LINE="#efefef",
+    TEXT="#111111", TEXT_DIM="#6b6b6b", TEXT_OFF="#a8a8a8",
     ACCENT="#ff4f12", ON_ACCENT="#ffffff", HIGHLIGHT="#ffe3d8",
-    SIDEBAR="#ffffff", ITEM_HOVER="#f4f4f4", ITEM_SEL="#fff1eb", CHIP="#ffffff", BUTTON_HOVER="#ececec",
+    SIDEBAR="#fbfbfb", ITEM_HOVER="#f3f3f3", ITEM_SEL="#fff1eb", CHIP="#ffffff", BUTTON_HOVER="#f3f3f3",
     DANGER="#d92d20", GOOD="#1f7a3a", STAR="#d99a00", STRONG="#111111",
     QUAD={1: "#ff4f12", 2: "#2563eb", 3: "#d99a00", 4: "#9a9a9a", 0: "#c8c8c8"},
-    RADIUS=2, SQUARE=True, DARK=False,
+    RADIUS=10, SQUARE=False, MINIMAL=True, DARK=False, FIELD="#ffffff", BUTTON="#ffffff",
 )
 
 
@@ -63,7 +63,7 @@ _P = DARK if MODE == "dark" or (MODE != "light" and windows_dark()) else LIGHT
 globals().update({k: v for k, v in _P.items()})
 
 R = RADIUS                       # 카드·칸 모서리
-R_SM = max(0, RADIUS - 3)        # 버튼·입력칸 모서리
+R_SM = 7                         # 버튼·입력칸 모서리
 SEL_BG = QColor(HIGHLIGHT)
 SEL_HOVER_BG = QColor(HIGHLIGHT)
 HOVER_BG = QColor(ITEM_HOVER)
@@ -95,6 +95,39 @@ def _set_style(self, css):
 
 QWidget.setStyleSheet = _set_style
 
+def _asset_dir():
+    import tempfile
+    d = os.path.join(tempfile.gettempdir(), "ideaboard-ui", "dark" if DARK else "light")
+    os.makedirs(d, exist_ok=True)
+    files = {
+        "chevron.svg": ('M6 9l6 6 6-6', TEXT_DIM, 2),
+        "chevron-up.svg": ('M6 15l6-6 6 6', TEXT_DIM, 2),
+        "check.svg": ('M5 12.5l4.5 4.5L19 7', ON_ACCENT, 3),
+    }
+    out = {}
+    for name, (d_, color, w) in files.items():
+        path = os.path.join(d, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%s" '
+                    'stroke-width="%s" stroke-linecap="round" stroke-linejoin="round"><path d="%s"/></svg>' % (color, w, d_))
+        out[name] = path.replace("\\", "/")
+    dot = os.path.join(d, "dot.svg")
+    with open(dot, "w", encoding="utf-8") as f:
+        f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="%s"/></svg>' % ON_ACCENT)
+    out["dot.svg"] = dot.replace("\\", "/")
+    return out
+
+
+try:
+    _A = _asset_dir()
+except OSError:
+    _A = {}
+
+
+def _url(name):
+    return "url(%s)" % _A[name] if name in _A else "none"
+
+
 FONT_FAMILY = "Malgun Gothic"
 
 
@@ -122,70 +155,101 @@ def font(size=10, weight=QFont.Normal):
 
 STYLE = f"""
 QWidget {{ color:{TEXT}; }}
-QToolTip {{ color:{TEXT}; background:{PANEL}; border:1px solid {BORDER}; padding:5px 7px; }}
-QLineEdit, QComboBox, QSpinBox {{
-    background:{BASE}; border:1px solid {BORDER}; border-radius:{R_SM}px; padding:4px 7px;
+QToolTip {{ color:{TEXT}; background:{PANEL}; border:1px solid {BORDER}; border-radius:6px; padding:6px 8px; }}
+
+QLineEdit, QComboBox, QSpinBox, QDateEdit {{
+    background:{FIELD}; border:1px solid {BORDER}; border-radius:{R_SM}px; padding:5px 10px; min-height:20px;
     selection-background-color:{HIGHLIGHT}; selection-color:{TEXT};
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color:{ACCENT}; }}
-QComboBox QAbstractItemView {{ background:{PANEL}; border:1px solid {BORDER}; selection-background-color:{HIGHLIGHT}; selection-color:{TEXT}; }}
+QLineEdit:hover, QComboBox:hover {{ border-color:{TEXT_OFF}; }}
+QLineEdit:focus, QComboBox:focus, QComboBox:on {{ border-color:{ACCENT}; }}
+QComboBox {{ padding-right:28px; combobox-popup:0; }}
+QComboBox::drop-down {{ subcontrol-origin:padding; subcontrol-position:center right; width:28px; border:none; background:transparent; }}
+QComboBox::down-arrow {{ image:{_url("chevron.svg")}; width:12px; height:12px; }}
+QComboBox::down-arrow:on {{ image:{_url("chevron-up.svg")}; }}
+QComboBox QAbstractItemView {{
+    background:{PANEL if DARK else BASE}; border:1px solid {BORDER}; border-radius:8px; padding:4px; outline:0;
+    selection-background-color:{ITEM_SEL}; selection-color:{TEXT};
+}}
+QComboBox QAbstractItemView::item {{ min-height:28px; padding:0 8px; border-radius:6px; }}
+QComboBox QAbstractItemView::item:hover {{ background:{ITEM_HOVER}; }}
+
 QPushButton {{
-    background:{PANEL}; border:1px solid {BORDER}; border-radius:{R_SM}px; padding:5px 13px;
+    background:{BUTTON}; border:1px solid {BORDER}; border-radius:{R_SM}px; padding:6px 14px; min-height:20px;
 }}
 QPushButton:hover {{ background:{BUTTON_HOVER}; border-color:{TEXT_OFF}; }}
 QPushButton:pressed {{ background:{ITEM_SEL}; }}
-QPushButton:disabled {{ color:{TEXT_OFF}; background:{ALT}; border-color:{BORDER}; }}
-QPushButton:default {{ background:{ACCENT}; color:{ON_ACCENT}; border-color:{ACCENT}; }}
-QToolButton {{ border-radius:{R_SM}px; padding:3px; }}
+QPushButton:disabled {{ color:{TEXT_OFF}; background:{ALT}; border-color:{LINE}; }}
+QPushButton:default {{ background:{ACCENT}; color:{ON_ACCENT}; border-color:{ACCENT}; font-weight:bold; }}
+QPushButton:default:hover {{ background:{ACCENT}; border-color:{TEXT if not DARK else ACCENT}; }}
+QPushButton#seg {{ border-radius:15px; padding:4px 16px; min-height:18px; }}
+QPushButton#seg:checked {{ background:{ACCENT}; color:{ON_ACCENT}; border-color:{ACCENT}; font-weight:bold; }}
+QPushButton#dateField {{ background:{FIELD}; text-align:left; padding:5px 10px; font-weight:normal; }}
+QPushButton#dateField:hover {{ border-color:{TEXT_OFF}; background:{FIELD}; }}
+QToolButton {{ border:none; border-radius:{R_SM}px; padding:4px; background:transparent; }}
 QToolButton:hover {{ background:{BUTTON_HOVER}; }}
+QToolButton::menu-indicator {{ image:none; width:0; }}
+
 QTreeView, QListView, QTableWidget, QListWidget {{
-    background:{BASE}; alternate-background-color:{ALT}; border:1px solid {BORDER};
-    selection-background-color:{HIGHLIGHT}; selection-color:{TEXT};
+    background:{BASE}; alternate-background-color:{ALT}; border:1px solid {BORDER}; border-radius:8px;
+    selection-background-color:{ITEM_SEL}; selection-color:{TEXT}; outline:0;
 }}
+QListWidget::item {{ padding:4px 6px; border-radius:6px; }}
+QListWidget::item:hover {{ background:{ITEM_HOVER}; }}
 QHeaderView::section {{
-    background:{PANEL}; color:{TEXT_DIM}; border:none; border-right:1px solid {BORDER};
-    border-bottom:1px solid {BORDER}; padding:4px 6px;
+    background:{PANEL}; color:{TEXT_DIM}; border:none; border-bottom:1px solid {BORDER}; padding:6px 8px;
 }}
-QSplitter::handle {{ background:{STRONG if SQUARE else BORDER}; }}
+QSplitter::handle {{ background:{LINE if MINIMAL else BORDER}; }}
 QStatusBar {{ background:{SIDEBAR}; color:{TEXT_DIM}; }}
-QProgressBar {{ background:{LINE}; border:none; border-radius:{R_SM}px; text-align:center; }}
-QProgressBar::chunk {{ background:{ACCENT}; border-radius:{R_SM}px; }}
-QMenu {{ background:{PANEL if not SQUARE else BASE}; border:1px solid {BORDER if not SQUARE else STRONG}; padding:4px; }}
-QMenu::item {{ padding:6px 22px 6px 14px; border-radius:{R_SM}px; }}
+QProgressBar {{ background:{LINE}; border:none; border-radius:3px; max-height:6px; text-align:center; }}
+QProgressBar::chunk {{ background:{ACCENT}; border-radius:3px; }}
+
+QMenu {{ background:{PANEL if DARK else BASE}; border:1px solid {BORDER}; border-radius:10px; padding:6px; }}
+QMenu::item {{ padding:7px 26px 7px 12px; border-radius:6px; }}
 QMenu::item:selected {{ background:{ITEM_SEL}; color:{TEXT}; }}
 QMenu::item:disabled {{ color:{TEXT_OFF}; }}
-QMenu::separator {{ height:1px; background:{BORDER}; margin:4px 6px; }}
-QScrollBar:vertical {{ background:transparent; width:10px; margin:0; }}
-QScrollBar:horizontal {{ background:transparent; height:10px; margin:0; }}
-QScrollBar::handle {{ background:{BORDER}; border-radius:{R_SM + 2 if not SQUARE else 0}px; margin:2px; min-height:24px; min-width:24px; }}
+QMenu::separator {{ height:1px; background:{LINE}; margin:5px 8px; }}
+QMenu::section {{ color:{TEXT_DIM}; padding:6px 12px 4px 12px; font-weight:bold; }}
+QMenu::icon {{ padding-left:8px; }}
+QMenu::indicator {{ width:14px; height:14px; left:6px; }}
+QMenu::indicator:checked {{ image:{_url("check.svg")}; background:{ACCENT}; border-radius:4px; }}
+
+QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}
+QScrollBar:horizontal {{ background:transparent; height:10px; margin:2px; }}
+QScrollBar::handle {{ background:{BORDER}; border-radius:3px; min-height:28px; min-width:28px; }}
 QScrollBar::handle:hover {{ background:{TEXT_OFF}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background:none; }}
+
 QMessageBox, QDialog {{ background:{WINDOW}; }}
+QDialog QLabel {{ background:transparent; }}
 QTextEdit, QPlainTextEdit {{
-    background:{BASE}; border:1px solid {BORDER}; border-radius:{R_SM}px; padding:5px;
+    background:{FIELD}; border:1px solid {BORDER}; border-radius:{R_SM}px; padding:6px 8px;
     selection-background-color:{HIGHLIGHT}; selection-color:{TEXT};
 }}
 QTextEdit:focus, QPlainTextEdit:focus {{ border-color:{ACCENT}; }}
-QTabWidget::pane {{ border:none; border-top:1px solid {BORDER}; }}
-QTabBar::tab {{
-    background:transparent; color:{TEXT_DIM}; padding:8px 16px; border:none;
-    border-bottom:2px solid transparent;
-}}
-QTabBar::tab:selected {{ color:{TEXT}; border-bottom-color:{ACCENT if not SQUARE else STRONG}; font-weight:{'bold' if SQUARE else 'normal'}; }}
+
+QTabWidget::pane {{ border:none; border-top:1px solid {LINE}; }}
+QTabBar::tab {{ background:transparent; color:{TEXT_DIM}; padding:9px 16px; border:none; border-bottom:2px solid transparent; }}
+QTabBar::tab:selected {{ color:{TEXT}; border-bottom-color:{ACCENT if not MINIMAL else STRONG}; font-weight:bold; }}
 QTabBar::tab:hover {{ color:{TEXT}; }}
+
 QCalendarWidget QWidget {{ alternate-background-color:{PANEL}; }}
-QCalendarWidget QAbstractItemView {{ background:{BASE}; selection-background-color:{ACCENT}; selection-color:{ON_ACCENT}; }}
+QCalendarWidget QAbstractItemView {{ background:{BASE}; selection-background-color:{ACCENT}; selection-color:{ON_ACCENT}; border:none; }}
 QCalendarWidget QToolButton {{ color:{TEXT}; padding:4px 8px; }}
 #qt_calendar_navigationbar {{ background:{PANEL}; }}
-QCheckBox::indicator, QRadioButton::indicator {{ width:14px; height:14px; border:1px solid {TEXT_DIM}; background:{BASE}; }}
-QCheckBox::indicator {{ border-radius:{R_SM}px; }}
-QRadioButton::indicator {{ border-radius:7px; }}
+
+QCheckBox, QRadioButton {{ spacing:8px; }}
+QCheckBox::indicator, QRadioButton::indicator {{ width:15px; height:15px; border:1.5px solid {TEXT_OFF}; background:{FIELD}; }}
+QCheckBox::indicator {{ border-radius:5px; }}
+QRadioButton::indicator {{ border-radius:8px; }}
 QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color:{ACCENT}; }}
-QCheckBox::indicator:checked {{ background:{ACCENT}; border-color:{ACCENT}; }}
-QRadioButton::indicator:checked {{ background:{ACCENT}; border:3px solid {BASE}; outline:1px solid {ACCENT}; }}
-QSlider::groove:horizontal {{ height:3px; background:{BORDER}; }}
-QSlider::handle:horizontal {{ width:12px; margin:-5px 0; border-radius:{6 if not SQUARE else 0}px; background:{ACCENT}; }}
+QCheckBox::indicator:checked {{ background:{ACCENT}; border-color:{ACCENT}; image:{_url("check.svg")}; }}
+QRadioButton::indicator:checked {{ background:{ACCENT}; border-color:{ACCENT}; image:{_url("dot.svg")}; }}
+
+QSlider::groove:horizontal {{ height:4px; background:{BORDER}; border-radius:2px; }}
+QSlider::sub-page:horizontal {{ background:{ACCENT}; border-radius:2px; }}
+QSlider::handle:horizontal {{ width:14px; height:14px; margin:-5px 0; border-radius:7px; background:{ACCENT}; }}
 """
 
 

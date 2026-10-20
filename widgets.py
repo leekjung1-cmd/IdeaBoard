@@ -11,6 +11,7 @@ class DateField(QPushButton):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("dateField")
         self._value = None
         self.setMinimumWidth(118)
         self.clicked.connect(self._pick)

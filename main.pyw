@@ -240,7 +240,7 @@ class IdeaDelegate(QStyledItemDelegate):
         p.setRenderHint(QPainter.Antialiasing)
         r = option.rect.adjusted(6, 1, -6, -1)
         selected = bool(option.state & QStyle.State_Selected)
-        if selected and theme.SQUARE:       # 미니멀: 왼쪽 신호색 막대 + 굵은 글씨
+        if selected and theme.MINIMAL:       # 미니멀: 왼쪽 신호색 막대 + 굵은 글씨
             p.fillRect(QRect(r.left(), r.top() + 3, 3, r.height() - 6), QColor(theme.ACCENT))
         elif selected:
             p.setPen(Qt.NoPen)
@@ -305,7 +305,7 @@ class IdeaDelegate(QStyledItemDelegate):
                 left += 19
         tr = QRect(left, r.top(), right - left, r.height())
         done = status in ("완료", "보류")
-        if selected and theme.SQUARE:
+        if selected and theme.MINIMAL:
             bf = p.font()
             bf.setBold(True)
             p.setFont(bf)
@@ -346,15 +346,15 @@ class Sidebar(QWidget):
             #sectionLabel {{ color:{dim}; padding:10px 14px 4px 14px; }}
         """.format(bg=theme.SIDEBAR, hover=theme.ITEM_HOVER, sel=theme.ITEM_SEL, panel=theme.PANEL,
                    border=theme.BORDER, accent=theme.ACCENT, dim=theme.TEXT_DIM,
-                   newbg=theme.STRONG if theme.SQUARE else theme.PANEL,
-                   newfg=theme.ON_ACCENT if theme.SQUARE else theme.TEXT,
-                   newborder=theme.STRONG if theme.SQUARE else theme.BORDER,
-                   newhover=theme.ACCENT if theme.SQUARE else theme.ITEM_HOVER))
+                   newbg=theme.STRONG if theme.MINIMAL else theme.PANEL,
+                   newfg=theme.ON_ACCENT if theme.MINIMAL else theme.TEXT,
+                   newborder=theme.STRONG if theme.MINIMAL else theme.BORDER,
+                   newhover=theme.ACCENT if theme.MINIMAL else theme.ITEM_HOVER))
 
-        name = QLabel("IDEA/BOARD" if theme.SQUARE else "아이디어 보드")
+        name = QLabel("IDEA/BOARD" if theme.MINIMAL else "아이디어 보드")
         f = name.font()
         f.setPointSize(13)
-        f.setWeight(QFont.Black if theme.SQUARE else QFont.Bold)
+        f.setWeight(QFont.Black if theme.MINIMAL else QFont.Bold)
         f.setLetterSpacing(QFont.PercentageSpacing, 96)
         name.setFont(f)
         name.setContentsMargins(8, 4, 0, 6)
@@ -386,7 +386,7 @@ class Sidebar(QWidget):
         self.app_menu_btn.setMenu(am)
 
         self.new_btn = QPushButton("  새로운 아이디어")
-        self.new_btn.setIcon(icons.icon("plus", theme.ON_ACCENT if theme.SQUARE else theme.TEXT))
+        self.new_btn.setIcon(icons.icon("plus", theme.ON_ACCENT if theme.MINIMAL else theme.TEXT))
         self.new_btn.setObjectName("newBtn")
         self.new_btn.setToolTip("Ctrl+N")
         self.new_btn.clicked.connect(self.newRequested)
