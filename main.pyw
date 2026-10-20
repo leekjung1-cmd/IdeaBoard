@@ -58,21 +58,9 @@ LEVEL_TEXT = {None: "미정", 1: "1 · 매우 낮음", 2: "2 · 낮음", 3: "3 �
 
 
 def make_icon():
-    """2×2 사분면 모양 아이콘."""
-    pm = QPixmap(256, 256)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    gap, pad = 14, 12
-    s = (256 - pad * 2 - gap) // 2
-    for i, q in enumerate((1, 2, 3, 4)):
-        x = pad + (i % 2) * (s + gap)
-        y = pad + (i // 2) * (s + gap)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.QUAD[q]))
-        p.drawRoundedRect(x, y, s, s, theme.r(22), theme.r(22))
-    p.end()
-    return pm
+    """앱 아이콘: 파란 바탕 위 노란 전구 (appicon.py)."""
+    import appicon
+    return appicon.pixmap(256)
 
 
 def quad_badge_style(q):
