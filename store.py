@@ -18,7 +18,13 @@ OLD_STATUS = {"아이디어": "보관함", "기획": "보관함", "개발 중": 
 
 def norm_status(st):
     return OLD_STATUS.get(st, st)
-CATEGORIES = ["일상", "취미", "업무", "공용"]     # 용도 기본 목록 (직접 입력한 것도 쓸 수 있음)
+# 분류 = 목표 (v1.7.0~). 직접 입력한 것도 쓸 수 있음
+CATEGORIES = ["클로드 실력", "수익화", "네트워크", "운동", "기타"]
+OLD_CATEGORIES = {"일상", "취미", "업무", "공용", "미래의 목표", "미래의목표"}
+
+# 주간 시간표: 평일(월~금) 밤 9시 반부터 30분씩
+WEEKDAYS = ["월", "화", "수", "목", "금"]
+SLOTS = ["21:30", "22:00", "22:30", "23:00", "23:30"]
 LEVELS = [1, 2, 3, 4, 5]          # 중요도·긴급도
 HIGH = 4                          # 이 값 이상이면 '높음'
 
@@ -53,7 +59,7 @@ DEV_SECTIONS = [
 ]
 
 IDEA_COLUMNS = ("title", "summary", "status", "category", "importance", "urgency",
-                "start_date", "due_date", "dev", "dev_folder", "next_step")
+                "start_date", "due_date", "dev", "dev_folder", "next_step", "shorts")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ideas(
@@ -65,6 +71,7 @@ CREATE TABLE IF NOT EXISTS ideas(
     dev INTEGER NOT NULL DEFAULT 0,         -- 1 = 개발 프로젝트 (개발 탭·완성 기준 등을 보여줌)
     dev_folder TEXT NOT NULL DEFAULT '',    -- 개발 시작 때 만든 폴더 (PC)
     next_step TEXT NOT NULL DEFAULT '',     -- 다음 한 걸음: 30분 안에 끝낼 다음 행동 1개
+    shorts INTEGER NOT NULL DEFAULT 0,      -- 1 = 쇼츠(짧은 영상) 소재
     importance INTEGER,             -- 1~5, NULL = 미정
     urgency INTEGER,                -- 1~5, NULL = 미정
     start_date TEXT,                -- 'YYYY-MM-DD' 또는 NULL
@@ -141,6 +148,15 @@ CREATE TABLE IF NOT EXISTS todos(
     updated_at INTEGER NOT NULL,
     deleted INTEGER NOT NULL DEFAULT 0
 );
+-- 주간 시간표: weekday 0=월 … 4=금, slot = SLOTS 순번. 칸 하나에 아이디어 하나
+CREATE TABLE IF NOT EXISTS timetable(
+    uuid TEXT PRIMARY KEY,
+    weekday INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    idea_uuid TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+);
 """
 
 TODO_COLORS = ["yellow", "pink", "green", "blue", "orange", "purple"]
@@ -152,7 +168,8 @@ FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 # 3 = v1.3.0 (할일 todos)
 # 4 = v1.5.0 (개발 프로젝트: ideas.dev·dev_folder, features.criteria)
 # 5 = v1.6.0 (ideas.next_step, 상태 이름 바꿈: 아이디어·기획 → 보관함, 개발 중 → 진행 중)
-SCHEMA_VERSION = 5
+# 6 = v1.7.0 (ideas.shorts, 주간 시간표 timetable)
+SCHEMA_VERSION = 6
 
 
 def now_ms():
@@ -197,6 +214,8 @@ class Store:
             self.db.execute("ALTER TABLE features ADD COLUMN criteria TEXT NOT NULL DEFAULT ''")
         if "next_step" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
+        if "shorts" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN shorts INTEGER NOT NULL DEFAULT 0")
         if ver < 5:
             # 상태 이름만 바꿈 (고친 시각은 그대로 → 폰과 주고받을 때 괜히 '바뀜'으로 안 잡힘. 폰 앱도 같은 규칙으로 바꿔 읽음)
             for old, new in OLD_STATUS.items():
@@ -293,6 +312,34 @@ class Store:
         self.add_memo(uid, "✅ 한 걸음 끝: " + step)
         self.update(uid, next_step="")
         return step
+
+    # ---------- 주간 점검 ----------
+    def touch(self, uid):
+        """'계속' 고름: 손댄 것으로 침 (오래 손 안 댄 것에서 빠짐)."""
+        self.db.execute("UPDATE ideas SET updated_at=? WHERE uuid=?", (now_ms(), uid))
+        self.db.commit()
+
+    def old_category_ideas(self):
+        """예전 분류(일상·취미·업무…)나 분류 없음인 아이디어."""
+        return [r for r in self.ideas() if r["category"] not in CATEGORIES]
+
+    # ---------- 주간 시간표 ----------
+    def timetable(self):
+        """{(요일, 칸): 행} — 지워진 아이디어 칸은 뺌. 행에는 아이디어 제목·다음 한 걸음도."""
+        rows = self.db.execute("""SELECT t.*, i.title, i.next_step, i.status, i.importance, i.urgency
+                                  FROM timetable t JOIN ideas i ON i.uuid=t.idea_uuid AND i.deleted=0
+                                  WHERE t.deleted=0""").fetchall()
+        return {(r["weekday"], r["slot"]): r for r in rows}
+
+    def set_slot(self, weekday, slot, idea_uuid):
+        """칸에 아이디어 놓기 (idea_uuid=None 이면 비우기). 그 칸에 있던 건 지움."""
+        t = now_ms()
+        self.db.execute("UPDATE timetable SET deleted=1, updated_at=? WHERE weekday=? AND slot=? AND deleted=0",
+                        (t, weekday, slot))
+        if idea_uuid:
+            self.db.execute("INSERT INTO timetable(uuid, weekday, slot, idea_uuid, updated_at) VALUES(?,?,?,?,?)",
+                            (str(uuid.uuid4()), weekday, slot, idea_uuid, t))
+        self.db.commit()
 
     def set_status_many(self, uids, status):
         """여러 아이디어 상태를 한꺼번에. 이미 그 상태인 건 건드리지 않음."""
@@ -500,7 +547,7 @@ class Store:
 
     # ---------- 다른 파일(예전 데이터·백업·다른 PC)과 합치기 ----------
     MERGE_TABLES = (("ideas", ("uuid",)), ("sections", ("uuid",)), ("memos", ("uuid",)),
-                    ("features", ("uuid",)), ("links", ("uuid",)), ("todos", ("uuid",)),
+                    ("features", ("uuid",)), ("links", ("uuid",)), ("todos", ("uuid",)), ("timetable", ("uuid",)),
                     ("brief", ("idea_uuid", "key")))
 
     def merge_from(self, path):
@@ -558,7 +605,7 @@ class Store:
         return self.db.execute("SELECT COUNT(*) FROM ideas WHERE deleted=0").fetchone()[0]
 
     # ---------- 폰 동기화 ----------
-    SYNC_TABLES = ("ideas", "sections", "memos", "features", "links", "todos")
+    SYNC_TABLES = ("ideas", "sections", "memos", "features", "links", "todos", "timetable")
 
     def apply_changes(self, changes):
         """폰에서 온 {표 이름: [행…]} 합치기. 돌려주는 값: (바뀐 행 수, 영향 받은 아이디어 uuid 집합)"""

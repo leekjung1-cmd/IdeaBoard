@@ -507,7 +507,7 @@ class GanttCanvas(QWidget):
             n = (e - date.today()).days
             lines.append("목표까지 %d일 남음" % n if n > 0 else "오늘이 목표일" if n == 0 else "%d일 지남" % -n)
         lines.append("상태: %s · %s%s" % (r["status"], QUADRANTS[quadrant(r["importance"], r["urgency"])],
-                                        " · 용도: " + r["category"] if r["category"] else ""))
+                                        " · 분류: " + r["category"] if r["category"] else ""))
         return "\n".join(lines)
 
 

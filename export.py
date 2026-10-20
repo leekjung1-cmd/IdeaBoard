@@ -29,7 +29,7 @@ def idea_markdown(store, uid):
     out += [
         "- 상태: %s" % r["status"],
         "- 다음 한 걸음: %s" % (r["next_step"] or "(안 정함)"),
-        "- 용도: %s" % (r["category"] or "안 정함"),
+        "- 분류: %s" % (r["category"] or "안 정함"),
         "- 중요도: %s / 긴급도: %s → %s" % (LEVEL[r["importance"]], LEVEL[r["urgency"]], QUADRANTS[q]),
         "- 일정: 시작 %s / 목표 %s" % (r["start_date"] or "미정", r["due_date"] or "미정"),
         "",
@@ -100,7 +100,7 @@ def export_all(parent, store):
     os.makedirs(folder, exist_ok=True)
     rows = store.ideas()
     used = set()
-    index = ["# 아이디어 목록", "", "| 아이디어 | 상태 | 용도 | 사분면 | 목표일 |", "|---|---|---|---|---|"]
+    index = ["# 아이디어 목록", "", "| 아이디어 | 상태 | 분류 | 사분면 | 목표일 |", "|---|---|---|---|---|"]
     for r in rows:
         name = safe_name(r["title"])
         base, n = name, 2

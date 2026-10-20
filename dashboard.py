@@ -16,6 +16,11 @@ import theme
 from todo import PAPER, dday as todo_dday
 from store import ACTIVE, ACTIVE_LIMIT, HIGH, QUADRANTS, STATUSES, quadrant
 
+
+def weekly_tonight(store_):
+    from weekly import tonight      # weekly 가 dashboard 를 안 쓰지만 순서 꼬임 방지로 여기서
+    return tonight(store_)
+
 LEVELS = 5
 CHIP_H = 24
 CHIP_H2 = 40        # 다음 한 걸음이 있는 칩 (두 줄)
@@ -344,7 +349,7 @@ class MatrixChart(QWidget):
                     lines.append(r["summary"])
                 if r["next_step"]:
                     lines.append("👣 다음 한 걸음: " + r["next_step"])
-                info = "상태: %s" % r["status"] + ("  ·  용도: %s" % r["category"] if r["category"] else "")
+                info = "상태: %s" % r["status"] + ("  ·  분류: %s" % r["category"] if r["category"] else "")
                 if r["importance"] is not None:
                     info += "  ·  중요도 %d  ·  긴급도 %d" % (r["importance"], r["urgency"])
                 if r["due_date"]:
@@ -446,6 +451,8 @@ class SchedulePanel(QFrame):
     """목표일 가까운 순 (지난 것 맨 위) + 곧 시작할 것."""
     opened = Signal(str)
     expandRequested = Signal()
+    reviewRequested = Signal()
+    timetableRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -474,7 +481,7 @@ class SchedulePanel(QFrame):
         lay.addWidget(head)
         lay.addWidget(self.scroll, 1)
 
-    def fill(self, rows, today=None):
+    def fill(self, rows, today=None, tonight=()):
         today = today or date.today()
         due = sorted((r for r in rows if r["due_date"]), key=lambda r: r["due_date"])
         start = sorted((r for r in rows if r["start_date"] and not r["due_date"]
@@ -501,6 +508,25 @@ class SchedulePanel(QFrame):
 
         def status(r):
             return [] if r["status"] == STATUSES[0] else [escape(r["status"])]
+
+        def link(text, signal, tip):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet("QPushButton { text-align:left; border:none; background:transparent; color:%s; padding:8px 4px 2px 4px; }"
+                            "QPushButton:hover { color:%s; }" % (theme.TEXT_DIM, theme.ACCENT))
+            b.clicked.connect(signal)
+            lay.addWidget(b)
+
+        # 오늘 밤 시간표
+        if tonight:
+            link("오늘 밤  ⤢ 시간표", self.timetableRequested, "주간 시간표 열기")
+            for t, r in tonight:
+                w = ScheduleRow({"uuid": r["idea_uuid"], "title": r["title"], "importance": r["importance"],
+                                 "urgency": r["urgency"], "next_step": r["next_step"], "status": r["status"]},
+                                t, theme.QUAD[2], "")
+                w.clicked.connect(self.opened)
+                lay.addWidget(w)
 
         # 진행 중 (최대 ACTIVE_LIMIT 개): 지금 손대고 있는 것과 그 다음 한 걸음
         active = sorted((r for r in rows if r["status"] == ACTIVE), key=lambda r: r["activity"])
@@ -541,7 +567,7 @@ class SchedulePanel(QFrame):
         stale = sorted((r for r in rows if r["status"] != "보류" and ago(r["activity"], today)[0] >= STALE_DAYS),
                        key=lambda r: r["activity"])
         if stale:
-            section("오래 손 안 댄 것")
+            link("오래 손 안 댄 것  ⤢ 주간 점검", self.reviewRequested, "멈춘 아이디어를 계속 / 보류 / 버리기로 정리")
             for r in stale[:8]:
                 n, _t, c = ago(r["activity"], today)
                 last = datetime.fromtimestamp(r["activity"] / 1000).strftime("%m/%d")
@@ -659,6 +685,8 @@ class TodoPanel(QFrame):
 
 
 class DashboardPage(QWidget):
+    reviewRequested = Signal()
+    timetableRequested = Signal()
     opened = Signal(str)
     changed = Signal(str)
     ganttRequested = Signal()
@@ -682,6 +710,21 @@ class DashboardPage(QWidget):
         self.schedule = SchedulePanel()
         self.schedule.opened.connect(self.opened)
         self.schedule.expandRequested.connect(self.ganttRequested)
+        self.schedule.reviewRequested.connect(self.reviewRequested)
+        self.schedule.timetableRequested.connect(self.timetableRequested)
+        # 금요일 밤 알림 줄
+        self.banner = QFrame()
+        self.banner.setObjectName("banner")
+        self.banner.setStyleSheet("#banner { background:%s; border:1px solid %s; border-radius:10px; }"
+                                  % (theme.PANEL, theme.QUAD[3]))
+        bl = QHBoxLayout(self.banner)
+        bl.setContentsMargins(14, 8, 10, 8)
+        self.banner_text = QLabel()
+        go = QPushButton("주간 점검 하기")
+        go.clicked.connect(self.reviewRequested)
+        bl.addWidget(self.banner_text, 1)
+        bl.addWidget(go)
+        self.banner.hide()
         self.todos = TodoPanel()
         self.todos.openRequested.connect(self.todosRequested)
         self.todos.toggled.connect(self._todo_toggled)
@@ -702,6 +745,7 @@ class DashboardPage(QWidget):
         lay.setSpacing(6)
         lay.addWidget(title)
         lay.addWidget(self.note)
+        lay.addWidget(self.banner)
         lay.addSpacing(6)
         lay.addLayout(row, 1)
 
@@ -710,10 +754,15 @@ class DashboardPage(QWidget):
         # 같은 칸 안에서는 목표일 빠른 순, 보류는 뒤로
         rows.sort(key=lambda r: (r["status"] == "보류", r["due_date"] or "9999", -r["activity"]))
         self.chart.set_rows(rows)
-        self.schedule.fill(rows)
+        self.schedule.fill(rows, tonight=weekly_tonight(self.store))
         self.todos.fill(self.store.todos())
         self.note.setText("아이디어 %d개 (완료 제외) · 칩을 누르면 열리고, 끌어서 옮기면 중요도·긴급도가 바뀌어요. "
                           "가운데 선이 3(보통), %d 이상이 '높음'." % (len(rows), HIGH))
+
+    def set_review_banner(self, show, n):
+        self.banner_text.setText("🗓 금요일 밤이에요. 멈춘 아이디어 %d개를 계속 / 보류 / 버리기로 정리할까요?" % n
+                                 if n else "🗓 금요일 밤이에요. 이번 주 멈춘 아이디어는 없어요. 진행 중인 것만 훑어볼까요?")
+        self.banner.setVisible(show)
 
     def _todo_toggled(self, tid, done):
         self.store.update_todo(tid, done=1 if done else 0)

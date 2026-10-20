@@ -8,7 +8,7 @@ import os
 import sys
 
 from PySide6.QtCore import (
-    QDate, QEvent, QLibraryInfo, QLocale, QObject, QPoint, QRect, QSize, Qt, QTimer, QTranslator, QUrl, Signal,
+    QDate, QEvent, QLibraryInfo, QLocale, QObject, QPoint, QRect, QSize, Qt, QTime, QTimer, QTranslator, QUrl, Signal,
 )
 from PySide6.QtGui import (
     QColor, QCursor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
@@ -30,6 +30,7 @@ from brief import BriefView
 from dashboard import DashboardPage
 from devkit import DevView
 import focus
+import weekly
 from gantt import GanttWindow
 import export
 from features import FeatureView
@@ -50,6 +51,7 @@ STATUS_ROLE = Qt.UserRole + 2
 CAT_ROLE = Qt.UserRole + 3
 DEV_ROLE = Qt.UserRole + 4
 PICK_ROLE = Qt.UserRole + 5     # 여러 개 선택 중이면 True/False (체크), 아니면 None
+SHORTS_ROLE = Qt.UserRole + 6
 
 LEVEL_TEXT = {None: "미정", 1: "1 · 매우 낮음", 2: "2 · 낮음", 3: "3 · 보통", 4: "4 · 높음", 5: "5 · 매우 높음"}
 
@@ -122,7 +124,7 @@ class CategoryCombo(QComboBox):
         super().__init__(parent)
         self.setEditable(True)
         self.setInsertPolicy(QComboBox.NoInsert)
-        self.lineEdit().setPlaceholderText("용도 (직접 입력 가능)")
+        self.lineEdit().setPlaceholderText("분류 (직접 입력 가능)")
         self.setMinimumWidth(130)
         self._last = ""
         self.set_items(categories)
@@ -176,7 +178,7 @@ class NewIdeaDialog(QDialog):
         self.start.setValue(QDate.currentDate().toString("yyyy-MM-dd"))    # 시작일은 기본 오늘
         form.addRow("제목", self.title)
         form.addRow("한 줄 요약", self.summary)
-        form.addRow("용도", self.category)
+        form.addRow("분류", self.category)
         form.addRow("상태", self.status)
         form.addRow("중요도", self.importance)
         form.addRow("긴급도", self.urgency)
@@ -189,6 +191,9 @@ class NewIdeaDialog(QDialog):
         self.dev.setToolTip("켜면 '개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
                             "기능마다 '확인하는 법' 칸이 생겨요. 나중에 아이디어 화면에서 켜고 꺼도 돼요.")
         form.addRow("", self.dev)
+        self.shorts = QCheckBox("🎬  쇼츠(짧은 영상) 소재로 쓸 만해요")
+        self.shorts.setToolTip("여행·장비처럼 영상으로 만들 수 있는 아이디어. ⋯ → 쇼츠 소재 모아보기에서 한 번에 봐요.")
+        form.addRow("", self.shorts)
 
         hint = QLabel("중요도·긴급도가 %d 이상이면 '높음'으로 보고 대시보드 4분면에 놓아요.\n"
                       "잘 모르겠으면 '미정'으로 두고 나중에 정해도 돼요.\n"
@@ -220,7 +225,7 @@ class NewIdeaDialog(QDialog):
                     importance=self.importance.value(),
                     urgency=self.urgency.value(), start_date=self.start.value(),
                     due_date=self.due.value(), dev=1 if self.dev.isChecked() else 0,
-                    next_step=self.next_step.text().strip())
+                    next_step=self.next_step.text().strip(), shorts=1 if self.shorts.isChecked() else 0)
 
 
 # ---------------------------------------------------------------- 왼쪽 목록
@@ -290,11 +295,12 @@ class IdeaDelegate(QStyledItemDelegate):
 
         title = index.data(Qt.DisplayRole) or "(제목 없음)"
         left = dot.right() + 10
-        if index.data(DEV_ROLE):    # 개발 프로젝트 표시
-            p.setPen(QColor(theme.TEXT_DIM))
-            ew = fm.horizontalAdvance("💻") + 4
-            p.drawText(QRect(left, r.top(), ew, r.height()), Qt.AlignVCenter | Qt.AlignLeft, "💻")
-            left += ew + 2
+        for role, mark in ((DEV_ROLE, "💻"), (SHORTS_ROLE, "🎬")):     # 개발 프로젝트 · 쇼츠 소재 표시
+            if index.data(role):
+                p.setPen(QColor(theme.TEXT_DIM))
+                ew = fm.horizontalAdvance(mark) + 4
+                p.drawText(QRect(left, r.top(), ew, r.height()), Qt.AlignVCenter | Qt.AlignLeft, mark)
+                left += ew + 2
         tr = QRect(left, r.top(), right - left, r.height())
         done = status in ("완료", "보류")
         p.setPen(QColor(theme.TEXT_DIM if done else theme.TEXT))
@@ -307,6 +313,8 @@ class Sidebar(QWidget):
     dashboardRequested = Signal()
     ganttRequested = Signal()
     todosRequested = Signal()
+    reviewRequested = Signal()
+    timetableRequested = Signal()
     appAction = Signal(str)
     ideaSelected = Signal(str)
     bulkStatus = Signal(list, str)      # 아이디어 uuid 들, 바꿀 상태
@@ -352,6 +360,9 @@ class Sidebar(QWidget):
         am.addAction("백업 파일 만들기…", lambda: self.appAction.emit("backup"))
         am.addAction("폰 연결 (와이파이 동기화)…", lambda: self.appAction.emit("phone"))
         am.addSeparator()
+        am.addAction("🎬 쇼츠 소재 모아보기…", lambda: self.appAction.emit("shorts"))
+        am.addAction("분류 옮기기 (목표 기준으로)…", lambda: self.appAction.emit("categories"))
+        am.addSeparator()
         am.addAction("예전 데이터·백업 가져오기 (합치기)…", lambda: self.appAction.emit("import"))
         am.addSeparator()
         am.addAction("데이터 폴더 열기", lambda: self.appAction.emit("data_dir"))
@@ -378,6 +389,15 @@ class Sidebar(QWidget):
         self.todo_btn.clicked.connect(self.todosRequested)
         self.set_todo_count(0)
 
+        self.tt_btn = QPushButton("▥  주간 시간표")
+        self.tt_btn.setObjectName("sideBtn")
+        self.tt_btn.setToolTip("평일 밤 9시 반부터 30분 칸에 아이디어 끌어다 놓기")
+        self.tt_btn.clicked.connect(self.timetableRequested)
+        self.review_btn = QPushButton("🗓  주간 점검")
+        self.review_btn.setObjectName("sideBtn")
+        self.review_btn.setToolTip("멈춘 아이디어를 계속 / 보류 / 버리기로 정리 (금요일 밤 추천)")
+        self.review_btn.clicked.connect(self.reviewRequested)
+
         self.search = QLineEdit()
         self.search.setPlaceholderText("검색 (제목·기획서·메모)")
         self.search.setClearButtonEnabled(True)
@@ -390,6 +410,7 @@ class Sidebar(QWidget):
         self.hidden = set()             # 목록에서 숨길 상태
         self.hidden_cats = set()        # 목록에서 숨길 용도 ('' = 용도 없음)
         self.dev_only = False           # 개발 프로젝트만 보기
+        self.shorts_only = False        # 쇼츠 소재만 보기
         self.sort_mode = "recent"
         self.view_btn = QToolButton()
         self.view_btn.setText("보기 ▾")
@@ -467,6 +488,8 @@ class Sidebar(QWidget):
         top.addWidget(self.dash_btn)
         top.addWidget(self.gantt_btn)
         top.addWidget(self.todo_btn)
+        top.addWidget(self.tt_btn)
+        top.addWidget(self.review_btn)
         top.addSpacing(4)
         top.addWidget(self.search)
 
@@ -500,7 +523,8 @@ class Sidebar(QWidget):
         """목록 다시 읽기. select 가 있으면 그 아이디어를 (신호 없이) 선택 상태로."""
         all_rows = self.store.ideas(self.search.text())
         rows = self._sorted([r for r in all_rows if r["status"] not in self.hidden
-                             and r["category"] not in self.hidden_cats and (r["dev"] or not self.dev_only)])
+                             and r["category"] not in self.hidden_cats and (r["dev"] or not self.dev_only)
+                             and (r["shorts"] or not self.shorts_only)])
         if self.picking:
             self.picked &= {r["uuid"] for r in rows}
         self.list.blockSignals(True)
@@ -513,6 +537,7 @@ class Sidebar(QWidget):
             it.setData(STATUS_ROLE, r["status"])
             it.setData(CAT_ROLE, r["category"])
             it.setData(DEV_ROLE, bool(r["dev"]))
+            it.setData(SHORTS_ROLE, bool(r["shorts"]))
             it.setData(PICK_ROLE, (r["uuid"] in self.picked) if self.picking else None)
             it.setToolTip((r["title"] or "") + ("\n" + r["summary"] if r["summary"] else ""))
             self.list.addItem(it)
@@ -529,7 +554,7 @@ class Sidebar(QWidget):
             text += "  (%d개 숨김)" % (len(all_rows) - len(rows))
         self.section.setText(text)
         self._update_pick_bar()
-        active = bool(self.hidden or self.hidden_cats or self.dev_only) or self.sort_mode != "recent"
+        active = bool(self.hidden or self.hidden_cats or self.dev_only or self.shorts_only) or self.sort_mode != "recent"
         self.view_btn.setStyleSheet("QToolButton { color:%s; padding:2px 6px; } "
                                     "QToolButton::menu-indicator { image:none; }"
                                     % (theme.ACCENT if active else theme.TEXT_DIM))
@@ -555,11 +580,11 @@ class Sidebar(QWidget):
             a.setCheckable(True)
             a.setChecked(st not in self.hidden)
             a.toggled.connect(lambda on, st=st: self._toggle_status(st, on))
-        m.addAction("모두 보기", lambda: self._set_view(hidden=set(), hidden_cats=set(), dev_only=False))
+        m.addAction("모두 보기", lambda: self._set_view(hidden=set(), hidden_cats=set(), dev_only=False, shorts_only=False))
         m.addAction("완료·보류 숨기기", lambda: self._set_view(hidden={"완료", "보류"}))
-        m.addSection("용도")
+        m.addSection("분류")
         for cat in self.store.categories() + [""]:
-            a = m.addAction(cat or "(용도 없음)")
+            a = m.addAction(cat or "(분류 없음)")
             a.setCheckable(True)
             a.setChecked(cat not in self.hidden_cats)
             a.toggled.connect(lambda on, cat=cat: self._toggle_cat(cat, on))
@@ -568,6 +593,10 @@ class Sidebar(QWidget):
         a.setCheckable(True)
         a.setChecked(self.dev_only)
         a.toggled.connect(lambda on: self._set_view(dev_only=on))
+        a = m.addAction("🎬 쇼츠 소재만")
+        a.setCheckable(True)
+        a.setChecked(self.shorts_only)
+        a.toggled.connect(lambda on: self._set_view(shorts_only=on))
         m.addSection("정렬")
         for key, label in self.SORTS:
             a = m.addAction(label)
@@ -585,7 +614,9 @@ class Sidebar(QWidget):
         (cats.discard if on else cats.add)(cat)
         self._set_view(hidden_cats=cats)
 
-    def _set_view(self, hidden=None, sort_mode=None, hidden_cats=None, dev_only=None):
+    def _set_view(self, hidden=None, sort_mode=None, hidden_cats=None, dev_only=None, shorts_only=None):
+        if shorts_only is not None:
+            self.shorts_only = bool(shorts_only)
         if dev_only is not None:
             self.dev_only = bool(dev_only)
         if hidden is not None:
@@ -599,13 +630,14 @@ class Sidebar(QWidget):
 
     def view_state(self):
         return {"hidden": sorted(self.hidden), "hidden_cats": sorted(self.hidden_cats), "sort": self.sort_mode,
-                "dev_only": self.dev_only}
+                "dev_only": self.dev_only, "shorts_only": self.shorts_only}
 
     def set_view_state(self, st):
         self.hidden = set(st.get("hidden", [])) & set(STATUSES)
         self.sort_mode = st.get("sort", "recent") if st.get("sort") in dict(self.SORTS) else "recent"
         self.hidden_cats = set(st.get("hidden_cats", []))
         self.dev_only = bool(st.get("dev_only", False))
+        self.shorts_only = bool(st.get("shorts_only", False))
 
     def select(self, uid):
         """uid 선택 (None 이면 선택 해제). 신호는 안 보냄."""
@@ -782,9 +814,16 @@ class IdeaPage(QWidget):
             "QToolButton:checked { background:%s; border-color:%s; color:%s; }"
             % (theme.BORDER, theme.TEXT_DIM, theme.ACCENT, theme.ITEM_SEL, theme.ACCENT, theme.TEXT))
         self.dev_btn.toggled.connect(self._toggle_dev)
+        self.shorts_btn = QToolButton()
+        self.shorts_btn.setText("🎬 쇼츠")
+        self.shorts_btn.setCheckable(True)
+        self.shorts_btn.setToolTip("영상(쇼츠)으로 만들 만한 소재면 켜요. ⋯ → 쇼츠 소재 모아보기에서 한 번에 봐요.")
+        self.shorts_btn.setStyleSheet(self.dev_btn.styleSheet())
+        self.shorts_btn.toggled.connect(self._toggle_shorts)
 
         head = QHBoxLayout()
         head.addWidget(self.title, 1)
+        head.addWidget(self.shorts_btn, 0, Qt.AlignVCenter)
         head.addWidget(self.dev_btn, 0, Qt.AlignVCenter)
         head.addWidget(self.link_btn, 0, Qt.AlignVCenter)
         head.addWidget(more, 0, Qt.AlignTop)
@@ -805,7 +844,7 @@ class IdeaPage(QWidget):
         meta.setHorizontalSpacing(8)
         meta.setVerticalSpacing(6)
         cells = ((0, 0, "상태", self.status), (0, 2, "중요도", self.importance), (0, 4, "긴급도", self.urgency),
-                 (1, 0, "시작", self.start), (1, 2, "목표", self.due), (1, 4, "용도", self.category))
+                 (1, 0, "시작", self.start), (1, 2, "목표", self.due), (1, 4, "분류", self.category))
         for r, c, label, w in cells:
             lb = QLabel(label)
             lb.setStyleSheet("color:%s;" % theme.TEXT_DIM)
@@ -879,6 +918,7 @@ class IdeaPage(QWidget):
         self.due.setValue(row["due_date"])
         dev = bool(row["dev"])
         self.dev_btn.setChecked(dev)
+        self.shorts_btn.setChecked(bool(row["shorts"]))
         self.tabs.setTabVisible(self.tabs.indexOf(self.devview), dev)
         if not dev and self.tabs.currentWidget() is self.devview:
             self.tabs.setCurrentWidget(self.brief)
@@ -950,6 +990,12 @@ class IdeaPage(QWidget):
         self.devview.refresh()
         if on:
             self.tabs.setCurrentWidget(self.devview)
+        self.changed.emit(self.uid)
+
+    def _toggle_shorts(self, on):
+        if self._loading or not self.uid:
+            return
+        self.store.update(self.uid, shorts=1 if on else 0)
         self.changed.emit(self.uid)
 
     def _dev_changed(self, uid):
@@ -1115,6 +1161,9 @@ class MainWindow(QMainWindow):
         self.sidebar.dashboardRequested.connect(self.show_dashboard)
         self.sidebar.ganttRequested.connect(self.open_gantt)
         self.sidebar.todosRequested.connect(self.open_todos)
+        self.sidebar.reviewRequested.connect(self.open_review)
+        self.sidebar.timetableRequested.connect(self.open_timetable)
+        self.timetable = None
         self.sidebar.appAction.connect(self._app_action)
         self.sidebar.ideaSelected.connect(self.open_idea)
         self.sidebar.bulkStatus.connect(self.set_status_many)
@@ -1126,6 +1175,12 @@ class MainWindow(QMainWindow):
         self.dashboard.ganttRequested.connect(self.open_gantt)
         self.dashboard.todosRequested.connect(self.open_todos)
         self.dashboard.todoChanged.connect(self._todos_changed)
+        self.dashboard.reviewRequested.connect(self.open_review)
+        self.dashboard.timetableRequested.connect(self.open_timetable)
+        # 금요일 밤이면 대시보드에 '주간 점검' 알림 (10분마다 확인)
+        self._review_timer = QTimer(self, interval=10 * 60 * 1000)
+        self._review_timer.timeout.connect(self._check_review_time)
+        self._review_timer.start()
 
         QShortcut(QKeySequence("Ctrl+N"), self, self.new_idea)
         QShortcut(QKeySequence("Ctrl+T"), self, self.open_gantt)
@@ -1148,6 +1203,9 @@ class MainWindow(QMainWindow):
         self.sidebar.refresh()
         self.sidebar.set_todo_count(self.store.open_todo_count())
         self.show_dashboard()
+        # 분류가 목표 기준으로 바뀜 → 예전 분류 아이디어가 있으면 한 번 옮기기 창
+        if self.store.old_category_ideas() and self.settings.get("cat_move_asked") != "1.7.0":
+            QTimer.singleShot(700, self._first_category_move)
 
     # ---------- 화면 전환 ----------
     def show_dashboard(self):
@@ -1155,6 +1213,7 @@ class MainWindow(QMainWindow):
         self.page.uid = None
         self.sidebar.select(None)
         self.dashboard.refresh()
+        self._check_review_time()
         self.stack.setCurrentWidget(self.dashboard)
 
     def open_idea(self, uid):
@@ -1230,8 +1289,66 @@ class MainWindow(QMainWindow):
             self.import_data()
         elif what == "phone":
             self.open_phone()
+        elif what == "shorts":
+            dlg = weekly.ShortsDialog(self.store, self)
+            dlg.opened.connect(self.open_idea)
+            dlg.exec()
+        elif what == "categories":
+            self.move_categories()
         elif what == "data_dir":
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.data_dir))
+
+    # ---------- 2단계: 주간 점검 · 분류 · 시간표 ----------
+    def open_review(self):
+        self.page.flush()
+        dlg = weekly.ReviewDialog(self.store, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.settings["last_review"] = QDate.currentDate().toString("yyyy-MM-dd")
+            self._save_settings()
+            if self.page.uid and self.store.get(self.page.uid) is None:
+                self.page.uid = None
+                self.show_dashboard()
+            self._after_remote_change(set())
+            self._check_review_time()
+            QMessageBox.information(self, "주간 점검", "정리했어요. (%s)\n다음 주 금요일 밤에 또 봐요!" % dlg.result_text)
+
+    def review_due(self):
+        """금요일 밤 9시 넘어서 ~ 일요일까지, 이번 주 금요일 뒤로 점검을 안 했으면 True."""
+        now = QDate.currentDate()
+        wd = now.dayOfWeek()        # 1=월 … 5=금 … 7=일
+        if wd < 5 or (wd == 5 and QTime.currentTime().hour() < 21):
+            return False
+        friday = now.addDays(5 - wd).toString("yyyy-MM-dd")
+        return self.settings.get("last_review", "") < friday
+
+    def _check_review_time(self):
+        n = len(weekly.stale_ideas(self.store))
+        self.dashboard.set_review_banner(self.review_due(), n)
+
+    def _first_category_move(self):
+        self.settings["cat_move_asked"] = "1.7.0"
+        self._save_settings()
+        self.move_categories()
+
+    def move_categories(self):
+        self.page.flush()
+        dlg = weekly.CategoryMoveDialog(self.store, self)
+        if dlg.exec() == QDialog.Accepted:
+            self._after_remote_change(set(r["uuid"] for r in self.store.ideas()))
+            QMessageBox.information(self, "분류 옮기기", "%d개를 새 분류로 옮겼어요." % dlg.moved)
+
+    def open_timetable(self):
+        if self.timetable is None:
+            self.timetable = weekly.TimetableWindow(self.store)      # 부모 없음 = 본 창과 따로
+            self.timetable.setWindowIcon(self.windowIcon())
+            self.timetable.changed.connect(lambda: self.dashboard.refresh())
+            self.timetable.openIdea.connect(self._open_from_gantt)
+            geo = self.settings.get("timetable_geometry")
+            if geo and QApplication.screenAt(QRect(*geo).center()) is not None:
+                self.timetable.setGeometry(*geo)
+        self.timetable.show()
+        self.timetable.raise_()
+        self.timetable.activateWindow()
 
     # ---------- 폰 동기화 ----------
     def open_phone(self):
@@ -1355,7 +1472,7 @@ class MainWindow(QMainWindow):
         self.page.flush()
         self.sync.stop()
         self._save_settings()
-        for win in (self.gantt, self.todo_win):      # 따로 떠 있는 창도 같이 닫기
+        for win in (self.gantt, self.todo_win, self.timetable):      # 따로 떠 있는 창도 같이 닫기
             if win is not None:
                 win.close()
         super().closeEvent(ev)
@@ -1368,7 +1485,8 @@ class MainWindow(QMainWindow):
         self.settings["list_view"] = self.sidebar.view_state()
         if self.todo_win is not None:
             self.settings["todo_view"] = self.todo_win.view_prefs()
-        for key, win in (("gantt_geometry", self.gantt), ("todo_geometry", self.todo_win)):
+        for key, win in (("gantt_geometry", self.gantt), ("todo_geometry", self.todo_win),
+                         ("timetable_geometry", getattr(self, "timetable", None))):
             if win is not None:
                 gg = win.normalGeometry() if win.isMaximized() else win.geometry()
                 self.settings[key] = [gg.x(), gg.y(), gg.width(), gg.height()]
