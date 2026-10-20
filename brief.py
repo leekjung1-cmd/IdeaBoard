@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from store import BRIEF_FIELDS, LEGACY_BRIEF_FIELDS
+from store import BRIEF_FIELDS, DEV_SECTIONS, LEGACY_BRIEF_FIELDS
 
-HINTS = {key: hint for key, _label, hint in LEGACY_BRIEF_FIELDS + BRIEF_FIELDS}
+HINTS = {key: hint for key, _label, hint in LEGACY_BRIEF_FIELDS + BRIEF_FIELDS + DEV_SECTIONS}
 
 
 class AutoText(QTextEdit):

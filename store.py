@@ -36,8 +36,15 @@ LEGACY_BRIEF_FIELDS = [
     ("questions", "미정 · 궁금한 점", "아직 못 정한 것, 알아봐야 할 것"),
 ]
 
+# 개발 프로젝트로 표시한 아이디어에만 기획서에 더 넣는 칸
+DEV_SECTIONS = [
+    ("dev_users", "누가 쓰나", "나 혼자? 가족? 어떤 상황에서 쓰나?"),
+    ("dev_not_now", "첫 버전에서 뺄 것", "욕심나지만 처음엔 안 만들 것. 이걸 정해 둬야 끝까지 만들 수 있어요"),
+    ("dev_done", "다 만들었다고 할 기준", "어떻게 되면 '첫 버전 완성'인가? (예: 폰에서 적은 게 PC에 뜬다)"),
+]
+
 IDEA_COLUMNS = ("title", "summary", "status", "category", "importance", "urgency",
-                "start_date", "due_date")
+                "start_date", "due_date", "dev", "dev_folder")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ideas(
@@ -46,6 +53,8 @@ CREATE TABLE IF NOT EXISTS ideas(
     summary TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT '아이디어',
     category TEXT NOT NULL DEFAULT '',      -- 용도 (일상/취미/업무/공용/직접 입력), '' = 안 정함
+    dev INTEGER NOT NULL DEFAULT 0,         -- 1 = 개발 프로젝트 (개발 탭·완성 기준 등을 보여줌)
+    dev_folder TEXT NOT NULL DEFAULT '',    -- 개발 시작 때 만든 폴더 (PC)
     importance INTEGER,             -- 1~5, NULL = 미정
     urgency INTEGER,                -- 1~5, NULL = 미정
     start_date TEXT,                -- 'YYYY-MM-DD' 또는 NULL
@@ -90,6 +99,7 @@ CREATE TABLE IF NOT EXISTS features(
     text TEXT NOT NULL DEFAULT '',
     priority TEXT NOT NULL DEFAULT '필수',
     done INTEGER NOT NULL DEFAULT 0,
+    criteria TEXT NOT NULL DEFAULT '',      -- 완성 기준: 다 됐는지 확인하는 법 (개발 프로젝트)
     position REAL NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -130,7 +140,8 @@ FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 # 저장 파일 구조 번호 (PRAGMA user_version). 1 = v1.0.0 (용도·필요한 기능·링크까지)
 # 2 = v1.2.1 (동기화 표마다 pc_seen: PC가 그 행을 받거나 합친 시각 → 폰 여러 대가 서로의 변경을 놓치지 않게)
 # 3 = v1.3.0 (할일 todos)
-SCHEMA_VERSION = 3
+# 4 = v1.5.0 (개발 프로젝트: ideas.dev·dev_folder, features.criteria)
+SCHEMA_VERSION = 4
 
 
 def now_ms():
@@ -167,6 +178,12 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(ideas)")}
         if "category" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+        if "dev" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN dev INTEGER NOT NULL DEFAULT 0")
+        if "dev_folder" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN dev_folder TEXT NOT NULL DEFAULT ''")
+        if "criteria" not in {r["name"] for r in self.db.execute("PRAGMA table_info(features)")}:
+            self.db.execute("ALTER TABLE features ADD COLUMN criteria TEXT NOT NULL DEFAULT ''")
         for t in self.SYNC_TABLES:
             if "pc_seen" not in {r["name"] for r in self.db.execute("PRAGMA table_info(%s)" % t)}:
                 self.db.execute("ALTER TABLE %s ADD COLUMN pc_seen INTEGER NOT NULL DEFAULT 0" % t)
@@ -232,8 +249,36 @@ class Store:
                         list(fields.values()) + [t, uid])
 
     def delete(self, uid):
-        self.db.execute("UPDATE ideas SET deleted=1, updated_at=? WHERE uuid=?", (now_ms(), uid))
+        self.delete_many([uid])
+
+    def delete_many(self, uids):
+        t = now_ms()
+        self.db.executemany("UPDATE ideas SET deleted=1, updated_at=? WHERE uuid=?", [(t, u) for u in uids])
         self.db.commit()
+
+    def set_status_many(self, uids, status):
+        """여러 아이디어 상태를 한꺼번에. 이미 그 상태인 건 건드리지 않음."""
+        t = now_ms()
+        self.db.executemany("UPDATE ideas SET status=?, updated_at=? WHERE uuid=? AND status<>?",
+                            [(status, t, u, status) for u in uids])
+        self.db.commit()
+
+    def add_dev_sections(self, uid):
+        """개발 프로젝트용 기획서 칸 중 없는 것만 맨 아래에 추가. 돌려주는 값: 추가한 칸 수"""
+        rows = self.sections(uid)
+        have = {r["key"] for r in rows}
+        pos = (rows[-1]["position"] if rows else 0) + 1
+        t = now_ms()
+        n = 0
+        for key, label, _hint in DEV_SECTIONS:
+            if key in have:
+                continue
+            self.db.execute("""INSERT INTO sections(uuid, idea_uuid, key, title, content, position, updated_at)
+                               VALUES(?,?,?,?,'',?,?)""", (str(uuid.uuid4()), uid, key, label, pos, t))
+            pos += 1
+            n += 1
+        self.db.commit()
+        return n
 
     # ---------- 기획서 칸 ----------
     def _default_sections(self, uid, old, t):
@@ -352,7 +397,7 @@ class Store:
         return fid
 
     def update_feature(self, fid, **fields):
-        bad = set(fields) - {"text", "priority", "done"}
+        bad = set(fields) - {"text", "priority", "done", "criteria"}
         if bad:
             raise ValueError("모르는 항목: %s" % ", ".join(sorted(bad)))
         if fields:

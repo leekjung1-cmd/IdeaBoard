@@ -1,4 +1,5 @@
-"""필요한 기능 탭: 아이디어에 필요한 기능을 중요도(필수 / 있으면 좋음 / 나중에)별로 적고 끝나면 체크."""
+"""필요한 기능 탭: 아이디어에 필요한 기능을 중요도(필수 / 있으면 좋음 / 나중에)별로 적고 끝나면 체크.
+개발 프로젝트면 중요도가 곧 만드는 단계이고, 기능마다 '확인하는 법'(완성 기준) 칸이 생긴다."""
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
@@ -6,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
+from devkit import STAGES
 from store import FEATURE_PRIORITIES
 
 PRIORITY_COLORS = {"필수": theme.QUAD[1], "있으면 좋음": theme.QUAD[2], "나중에": theme.QUAD[4]}
@@ -14,10 +16,11 @@ PRIORITY_COLORS = {"필수": theme.QUAD[1], "있으면 좋음": theme.QUAD[2], "
 class FeatureRow(QWidget):
     request = Signal(str, str, object)      # 기능 uuid, 동작, 값
 
-    def __init__(self, row, first, last, parent=None):
+    def __init__(self, row, first, last, dev=False, parent=None):
         super().__init__(parent)
         self.fid = row["uuid"]
         self.saved_text = row["text"]
+        self.saved_criteria = row["criteria"]
         done = bool(row["done"])
         self.check = QCheckBox()
         self.check.setChecked(done)
@@ -50,12 +53,39 @@ class FeatureRow(QWidget):
         m.addAction("삭제", lambda: self.request.emit(self.fid, "delete", None))
         more.setMenu(m)
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 0, 0, 0)
-        lay.setSpacing(4)
-        lay.addWidget(self.check)
-        lay.addWidget(self.text, 1)
-        lay.addWidget(more)
+        line = QHBoxLayout()
+        line.setContentsMargins(4, 0, 0, 0)
+        line.setSpacing(4)
+        line.addWidget(self.check)
+        line.addWidget(self.text, 1)
+        line.addWidget(more)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addLayout(line)
+        self.criteria = None
+        if dev:     # 개발 프로젝트: 다 됐는지 확인하는 법
+            self.criteria = QLineEdit(row["criteria"])
+            self.criteria.setPlaceholderText("✔ 다 됐는지 확인하는 법 (예: 폰에서 적은 게 PC에도 뜬다)")
+            self.criteria.setToolTip("완성 기준: 이 기능이 다 됐는지 직접 확인하는 방법")
+            cf = self.criteria.font()
+            cf.setPointSize(max(8, cf.pointSize() - 1))
+            self.criteria.setFont(cf)
+            self.criteria.setStyleSheet(
+                "QLineEdit { border:1px solid transparent; background:transparent; padding:0 4px; color:%s; }"
+                "QLineEdit:hover { border-color:%s; } QLineEdit:focus { border-color:%s; background:%s; color:%s; }"
+                % (theme.TEXT_DIM, theme.BORDER, theme.ACCENT, theme.BASE, theme.TEXT))
+            self.criteria.editingFinished.connect(self._save_criteria)
+            sub = QHBoxLayout()
+            sub.setContentsMargins(30, 0, 36, 4)
+            sub.addWidget(self.criteria)
+            lay.addLayout(sub)
+
+    def _save_criteria(self):
+        t = self.criteria.text().strip()
+        if t != self.saved_criteria:
+            self.saved_criteria = t
+            self.request.emit(self.fid, "criteria", t)
 
     def _save_text(self):
         t = self.text.text().strip()
@@ -74,6 +104,7 @@ class FeatureView(QWidget):
         super().__init__(parent)
         self.store = store_
         self.uid = None
+        self.dev = False
 
         self.input = QLineEdit()
         self.input.setPlaceholderText("필요한 기능을 적고 Enter  (예: 폰과 동기화, 다크 모드)")
@@ -106,6 +137,10 @@ class FeatureView(QWidget):
         lay.addLayout(opts)
         lay.addWidget(self.scroll, 1)
 
+    def set_dev(self, on):
+        """개발 프로젝트면 단계 이름 + 확인하는 법 칸."""
+        self.dev = bool(on)
+
     def load(self, uid, keep_scroll=False):
         self.uid = uid
         sb = self.scroll.verticalScrollBar()
@@ -127,12 +162,12 @@ class FeatureView(QWidget):
             done = sum(1 for r in group if r["done"])
             head = QLabel("<span style='color:%s; font-weight:bold'>● %s</span>"
                           "&nbsp;&nbsp;<span style='color:%s'>%d / %d</span>"
-                          % (PRIORITY_COLORS[pr], pr, theme.TEXT_DIM, done, len(group)))
+                          % (PRIORITY_COLORS[pr], STAGES[pr] if self.dev else pr, theme.TEXT_DIM, done, len(group)))
             head.setStyleSheet("padding:10px 2px 2px 2px;")
             lay.addWidget(head)
             shown = [r for r in group if not (self.hide_done.isChecked() and r["done"])]
             for i, r in enumerate(shown):
-                w = FeatureRow(r, i == 0, i == len(shown) - 1)
+                w = FeatureRow(r, i == 0, i == len(shown) - 1, self.dev)
                 w.request.connect(self._on_request)
                 lay.addWidget(w)
             if len(shown) < len(group):
@@ -164,8 +199,8 @@ class FeatureView(QWidget):
     def _on_request(self, fid, what, value):
         if what == "done":
             self.store.update_feature(fid, done=1 if value else 0)
-        elif what == "text":
-            self.store.update_feature(fid, text=value)
+        elif what in ("text", "criteria"):
+            self.store.update_feature(fid, **{what: value})
             self.changed.emit(self.uid)
             return      # 글만 바뀐 건 다시 그릴 필요 없음 (커서 유지)
         elif what == "priority":

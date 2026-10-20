@@ -46,7 +46,10 @@ def idea_markdown(store, uid):
             group = [f for f in feats if f["priority"] == pr]
             if group:
                 out.append("**%s**" % pr)
-                out += ["- [%s] %s" % ("x" if f["done"] else " ", f["text"]) for f in group]
+                for f in group:
+                    out.append("- [%s] %s" % ("x" if f["done"] else " ", f["text"]))
+                    if f["criteria"].strip():
+                        out.append("  - 확인: %s" % f["criteria"].strip())
                 out.append("")
 
     memos = store.memos(uid)
@@ -128,9 +131,9 @@ def backup(parent, store):
                                          "data 폴더의 ideas.db 자리에 넣으면 돼요." % path)
 
 
-def send_to_claude(parent, store, uid):
-    """기획서·기능·메모를 클립보드에 복사하고 클로드 앱을 연다."""
-    QGuiApplication.clipboard().setText(CLAUDE_PROMPT + idea_markdown(store, uid))
+def send_to_claude(parent, store, uid, prompt=CLAUDE_PROMPT):
+    """부탁 글 + 기획서·기능·메모를 클립보드에 복사하고 클로드 앱을 연다."""
+    QGuiApplication.clipboard().setText(prompt + idea_markdown(store, uid))
     opened = QDesktopServices.openUrl(QUrl("claude://"))
     QMessageBox.information(
         parent, "클로드로 보내기",

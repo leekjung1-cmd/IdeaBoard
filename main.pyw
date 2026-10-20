@@ -14,7 +14,7 @@ from PySide6.QtGui import (
     QColor, QCursor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCalendarWidget, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QAbstractItemView, QApplication, QCalendarWidget, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QStackedWidget,
     QStyle, QStyledItemDelegate, QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction,
@@ -28,6 +28,7 @@ from version import VERSION
 from widgets import DateField
 from brief import BriefView
 from dashboard import DashboardPage
+from devkit import DevView
 from gantt import GanttWindow
 import export
 from features import FeatureView
@@ -46,6 +47,8 @@ UID = Qt.UserRole
 QUAD_ROLE = Qt.UserRole + 1
 STATUS_ROLE = Qt.UserRole + 2
 CAT_ROLE = Qt.UserRole + 3
+DEV_ROLE = Qt.UserRole + 4
+PICK_ROLE = Qt.UserRole + 5     # 여러 개 선택 중이면 True/False (체크), 아니면 None
 
 LEVEL_TEXT = {None: "미정", 1: "1 · 매우 낮음", 2: "2 · 낮음", 3: "3 · 보통", 4: "4 · 높음", 5: "5 · 매우 높음"}
 
@@ -178,6 +181,10 @@ class NewIdeaDialog(QDialog):
         form.addRow("긴급도", self.urgency)
         form.addRow("시작 예정일", self.start)
         form.addRow("목표 완료일", self.due)
+        self.dev = QCheckBox("💻  개발할 앱·프로그램이에요")
+        self.dev.setToolTip("켜면 '개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
+                            "기능마다 '확인하는 법' 칸이 생겨요. 나중에 아이디어 화면에서 켜고 꺼도 돼요.")
+        form.addRow("", self.dev)
 
         hint = QLabel("중요도·긴급도가 %d 이상이면 '높음'으로 보고 대시보드 4분면에 놓아요.\n"
                       "잘 모르겠으면 '미정'으로 두고 나중에 정해도 돼요." % store.HIGH)
@@ -206,7 +213,7 @@ class NewIdeaDialog(QDialog):
                     status=self.status.value(), category=self.category.value(),
                     importance=self.importance.value(),
                     urgency=self.urgency.value(), start_date=self.start.value(),
-                    due_date=self.due.value())
+                    due_date=self.due.value(), dev=1 if self.dev.isChecked() else 0)
 
 
 # ---------------------------------------------------------------- 왼쪽 목록
@@ -230,7 +237,23 @@ class IdeaDelegate(QStyledItemDelegate):
 
         q = index.data(QUAD_ROLE) or 0
         status = index.data(STATUS_ROLE) or ""
-        dot = QRect(r.left() + 10, r.center().y() - 4, 9, 9)
+        pick = index.data(PICK_ROLE)
+        x0 = r.left() + 10
+        if pick is not None:        # 여러 개 선택 중: 체크칸
+            if pick and not option.state & QStyle.State_MouseOver:
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(theme.ITEM_SEL))
+                p.drawRoundedRect(r, 6, 6)
+            box = QRect(x0, r.center().y() - 7, 14, 14)
+            p.setPen(QPen(QColor(theme.ACCENT if pick else theme.TEXT_DIM), 1.4))
+            p.setBrush(QColor(theme.ACCENT) if pick else Qt.NoBrush)
+            p.drawRoundedRect(box, 3, 3)
+            if pick:
+                p.setPen(QPen(QColor("white"), 2))
+                p.drawLine(box.left() + 3, box.center().y(), box.left() + 6, box.bottom() - 3)
+                p.drawLine(box.left() + 6, box.bottom() - 3, box.right() - 3, box.top() + 3)
+            x0 = box.right() + 9
+        dot = QRect(x0, r.center().y() - 4, 9, 9)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(theme.QUAD[q]))
         if q:
@@ -259,7 +282,13 @@ class IdeaDelegate(QStyledItemDelegate):
             right -= cw + 8
 
         title = index.data(Qt.DisplayRole) or "(제목 없음)"
-        tr = QRect(dot.right() + 10, r.top(), right - dot.right() - 10, r.height())
+        left = dot.right() + 10
+        if index.data(DEV_ROLE):    # 개발 프로젝트 표시
+            p.setPen(QColor(theme.TEXT_DIM))
+            ew = fm.horizontalAdvance("💻") + 4
+            p.drawText(QRect(left, r.top(), ew, r.height()), Qt.AlignVCenter | Qt.AlignLeft, "💻")
+            left += ew + 2
+        tr = QRect(left, r.top(), right - left, r.height())
         done = status in ("완료", "보류")
         p.setPen(QColor(theme.TEXT_DIM if done else theme.TEXT))
         p.drawText(tr, Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(title, Qt.ElideRight, tr.width()))
@@ -273,8 +302,11 @@ class Sidebar(QWidget):
     todosRequested = Signal()
     appAction = Signal(str)
     ideaSelected = Signal(str)
-    deleteRequested = Signal(str)
+    bulkStatus = Signal(list, str)      # 아이디어 uuid 들, 바꿀 상태
+    bulkDelete = Signal(list)
     viewChanged = Signal()
+
+    LONG_PRESS_MS = 550
 
     def __init__(self, store_, parent=None):
         super().__init__(parent)
@@ -350,6 +382,7 @@ class Sidebar(QWidget):
         # 보기: 상태 필터 + 정렬 (설정에 저장)
         self.hidden = set()             # 목록에서 숨길 상태
         self.hidden_cats = set()        # 목록에서 숨길 용도 ('' = 용도 없음)
+        self.dev_only = False           # 개발 프로젝트만 보기
         self.sort_mode = "recent"
         self.view_btn = QToolButton()
         self.view_btn.setText("보기 ▾")
@@ -369,6 +402,52 @@ class Sidebar(QWidget):
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._menu)
         self.list.currentItemChanged.connect(self._current_changed)
+        self.list.itemClicked.connect(self._clicked)
+
+        # 여러 개 선택: 길게 누르거나 오른쪽 클릭 → '여러 개 선택'. 체크한 것들을 한꺼번에 상태 바꾸기·삭제
+        self.shown = None               # 오른쪽에 열려 있는 아이디어
+        self.picking = False
+        self.picked = set()
+        self._swallow_click = False
+        self._press = None
+        self._press_timer = QTimer(self, singleShot=True, interval=self.LONG_PRESS_MS)
+        self._press_timer.timeout.connect(self._long_pressed)
+        self.list.viewport().installEventFilter(self)
+        self.pick_bar = QWidget()
+        self.pick_bar.setObjectName("pickBar")
+        self.pick_bar.setAttribute(Qt.WA_StyledBackground, True)
+        self.pick_bar.setStyleSheet("#pickBar { background:%s; border:1px solid %s; border-radius:8px; }"
+                                    % (theme.PANEL, theme.ACCENT))
+        pb = QVBoxLayout(self.pick_bar)
+        pb.setContentsMargins(8, 6, 8, 6)
+        pb.setSpacing(4)
+        self.pick_label = QLabel()
+        pick_btns = QHBoxLayout()
+        pick_btns.setSpacing(4)
+        self.pick_status = QToolButton()
+        self.pick_status.setText("상태 ▾")
+        self.pick_status.setToolTip("체크한 아이디어의 상태를 한꺼번에 바꾸기")
+        self.pick_status.setPopupMode(QToolButton.InstantPopup)
+        self.pick_status.setStyleSheet("QToolButton::menu-indicator { image:none; }")
+        sm = QMenu(self.pick_status)
+        for st in STATUSES:
+            sm.addAction(st, lambda st=st: self.picked and self.bulkStatus.emit(sorted(self.picked), st))
+        self.pick_status.setMenu(sm)
+        self.pick_del = QPushButton("삭제")
+        self.pick_del.clicked.connect(lambda: self.picked and self.bulkDelete.emit(sorted(self.picked)))
+        self.pick_all = QPushButton("전체")
+        self.pick_all.setToolTip("보이는 것 전부 체크 / 해제")
+        self.pick_all.clicked.connect(self._pick_all)
+        pick_cancel = QPushButton("취소")
+        pick_cancel.setToolTip("선택 끝내기 (Esc)")
+        pick_cancel.clicked.connect(lambda: self.end_pick())
+        for b in (self.pick_status, self.pick_del, self.pick_all, pick_cancel):
+            pick_btns.addWidget(b)
+        pb.addWidget(self.pick_label)
+        pb.addLayout(pick_btns)
+        self.pick_bar.hide()
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self, lambda: self.picking and self.end_pick())
+        esc.setContext(Qt.WidgetWithChildrenShortcut)
 
         top = QVBoxLayout()
         top.setContentsMargins(10, 12, 10, 4)
@@ -393,6 +472,10 @@ class Sidebar(QWidget):
         sec.addWidget(self.view_btn, 0, Qt.AlignBottom)
         lay.addLayout(top)
         lay.addLayout(sec)
+        pick_wrap = QHBoxLayout()
+        pick_wrap.setContentsMargins(8, 2, 8, 4)
+        pick_wrap.addWidget(self.pick_bar)
+        lay.addLayout(pick_wrap)
         lay.addWidget(self.list, 1)
         ver = QLabel("v%s" % VERSION)
         ver.setStyleSheet("color:%s; padding:2px 14px;" % theme.TEXT_OFF)
@@ -410,7 +493,9 @@ class Sidebar(QWidget):
         """목록 다시 읽기. select 가 있으면 그 아이디어를 (신호 없이) 선택 상태로."""
         all_rows = self.store.ideas(self.search.text())
         rows = self._sorted([r for r in all_rows if r["status"] not in self.hidden
-                             and r["category"] not in self.hidden_cats])
+                             and r["category"] not in self.hidden_cats and (r["dev"] or not self.dev_only)])
+        if self.picking:
+            self.picked &= {r["uuid"] for r in rows}
         self.list.blockSignals(True)
         self.list.clear()
         sel_item = None
@@ -420,6 +505,8 @@ class Sidebar(QWidget):
             it.setData(QUAD_ROLE, quadrant(r["importance"], r["urgency"]))
             it.setData(STATUS_ROLE, r["status"])
             it.setData(CAT_ROLE, r["category"])
+            it.setData(DEV_ROLE, bool(r["dev"]))
+            it.setData(PICK_ROLE, (r["uuid"] in self.picked) if self.picking else None)
             it.setToolTip((r["title"] or "") + ("\n" + r["summary"] if r["summary"] else ""))
             self.list.addItem(it)
             if r["uuid"] == select:
@@ -434,7 +521,8 @@ class Sidebar(QWidget):
         if len(rows) != len(all_rows):
             text += "  (%d개 숨김)" % (len(all_rows) - len(rows))
         self.section.setText(text)
-        active = bool(self.hidden or self.hidden_cats) or self.sort_mode != "recent"
+        self._update_pick_bar()
+        active = bool(self.hidden or self.hidden_cats or self.dev_only) or self.sort_mode != "recent"
         self.view_btn.setStyleSheet("QToolButton { color:%s; padding:2px 6px; } "
                                     "QToolButton::menu-indicator { image:none; }"
                                     % (theme.ACCENT if active else theme.TEXT_DIM))
@@ -460,7 +548,7 @@ class Sidebar(QWidget):
             a.setCheckable(True)
             a.setChecked(st not in self.hidden)
             a.toggled.connect(lambda on, st=st: self._toggle_status(st, on))
-        m.addAction("모두 보기", lambda: self._set_view(hidden=set(), hidden_cats=set()))
+        m.addAction("모두 보기", lambda: self._set_view(hidden=set(), hidden_cats=set(), dev_only=False))
         m.addAction("완료·보류 숨기기", lambda: self._set_view(hidden={"완료", "보류"}))
         m.addSection("용도")
         for cat in self.store.categories() + [""]:
@@ -468,6 +556,11 @@ class Sidebar(QWidget):
             a.setCheckable(True)
             a.setChecked(cat not in self.hidden_cats)
             a.toggled.connect(lambda on, cat=cat: self._toggle_cat(cat, on))
+        m.addSection("종류")
+        a = m.addAction("💻 개발 프로젝트만")
+        a.setCheckable(True)
+        a.setChecked(self.dev_only)
+        a.toggled.connect(lambda on: self._set_view(dev_only=on))
         m.addSection("정렬")
         for key, label in self.SORTS:
             a = m.addAction(label)
@@ -485,7 +578,9 @@ class Sidebar(QWidget):
         (cats.discard if on else cats.add)(cat)
         self._set_view(hidden_cats=cats)
 
-    def _set_view(self, hidden=None, sort_mode=None, hidden_cats=None):
+    def _set_view(self, hidden=None, sort_mode=None, hidden_cats=None, dev_only=None):
+        if dev_only is not None:
+            self.dev_only = bool(dev_only)
         if hidden is not None:
             self.hidden = set(hidden)
         if hidden_cats is not None:
@@ -496,15 +591,18 @@ class Sidebar(QWidget):
         self.viewChanged.emit()
 
     def view_state(self):
-        return {"hidden": sorted(self.hidden), "hidden_cats": sorted(self.hidden_cats), "sort": self.sort_mode}
+        return {"hidden": sorted(self.hidden), "hidden_cats": sorted(self.hidden_cats), "sort": self.sort_mode,
+                "dev_only": self.dev_only}
 
     def set_view_state(self, st):
         self.hidden = set(st.get("hidden", [])) & set(STATUSES)
         self.sort_mode = st.get("sort", "recent") if st.get("sort") in dict(self.SORTS) else "recent"
         self.hidden_cats = set(st.get("hidden_cats", []))
+        self.dev_only = bool(st.get("dev_only", False))
 
     def select(self, uid):
         """uid 선택 (None 이면 선택 해제). 신호는 안 보냄."""
+        self.shown = uid
         self.list.blockSignals(True)
         self.list.setCurrentRow(-1)
         for i in range(self.list.count()):
@@ -515,18 +613,110 @@ class Sidebar(QWidget):
         self.dash_btn.setChecked(uid is None)
 
     def _current_changed(self, cur, _prev):
-        if cur is not None:
+        if cur is not None and not self.picking:
             self.dash_btn.setChecked(False)
-            self.ideaSelected.emit(cur.data(UID))
+            self.shown = cur.data(UID)
+            self.ideaSelected.emit(self.shown)
 
     def _menu(self, pos):
         it = self.list.itemAt(pos)
         if not it:
             return
+        uid = it.data(UID)
+        uids = sorted(self.picked) if self.picking and uid in self.picked else [uid]
+        many = " (%d개)" % len(uids) if len(uids) > 1 else ""
         m = QMenu(self)
-        a_del = m.addAction("삭제")
-        if m.exec(self.list.viewport().mapToGlobal(pos)) is a_del:
-            self.deleteRequested.emit(it.data(UID))
+        sub = m.addMenu("상태 바꾸기" + many)
+        cur = it.data(STATUS_ROLE)
+        for st in STATUSES:
+            a = sub.addAction(st, lambda st=st: self.bulkStatus.emit(uids, st))
+            if len(uids) == 1 and st == cur:
+                a.setCheckable(True)
+                a.setChecked(True)
+        if not self.picking:
+            m.addAction("여러 개 선택 (체크해서 한꺼번에)", lambda: self.start_pick(uid))
+        m.addSeparator()
+        m.addAction("삭제" + many, lambda: self.bulkDelete.emit(uids))
+        m.exec(self.list.viewport().mapToGlobal(pos))
+
+    # ---------- 여러 개 선택 ----------
+    def eventFilter(self, obj, ev):
+        if obj is self.list.viewport():
+            t = ev.type()
+            if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                self._press = ev.position().toPoint()
+                self._press_timer.start()
+            elif t == QEvent.MouseMove and self._press is not None:
+                if (ev.position().toPoint() - self._press).manhattanLength() > 8:
+                    self._press_timer.stop()
+                    self._press = None
+            elif t in (QEvent.MouseButtonRelease, QEvent.Leave):
+                self._press_timer.stop()
+                self._press = None
+                if self._swallow_click:     # 손 뗄 때 클릭 신호가 안 오는 경우도 있어서 이번 차례가 끝나면 풀기
+                    QTimer.singleShot(0, lambda: setattr(self, "_swallow_click", False))
+        return super().eventFilter(obj, ev)
+
+    def _long_pressed(self):
+        it = self.list.itemAt(self._press) if self._press is not None else None
+        self._press = None
+        if it is None:
+            return
+        uid = it.data(UID)
+        if self.picking:
+            self._toggle_pick(uid)
+        else:
+            self.start_pick(uid)
+        self._swallow_click = True      # 손을 뗄 때 오는 클릭은 무시
+
+    def start_pick(self, uid=None):
+        self.picking = True
+        self.picked = {uid} if uid else set()
+        self.list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.pick_bar.show()
+        self.refresh(self.shown)
+
+    def end_pick(self):
+        if not self.picking:
+            return
+        self.picking = False
+        self.picked = set()
+        self._swallow_click = False
+        self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.pick_bar.hide()
+        self.refresh(self.shown)
+
+    def _clicked(self, it):
+        if not self.picking:
+            return
+        if self._swallow_click:
+            self._swallow_click = False
+            return
+        self._toggle_pick(it.data(UID))
+
+    def _toggle_pick(self, uid):
+        (self.picked.discard if uid in self.picked else self.picked.add)(uid)
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            if it.data(UID) == uid:
+                it.setData(PICK_ROLE, uid in self.picked)
+        self._update_pick_bar()
+
+    def _pick_all(self):
+        uids = {self.list.item(i).data(UID) for i in range(self.list.count())}
+        self.picked = set() if uids and uids <= self.picked else uids
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            it.setData(PICK_ROLE, it.data(UID) in self.picked)
+        self._update_pick_bar()
+
+    def _update_pick_bar(self):
+        if not self.picking:
+            return
+        n = len(self.picked)
+        self.pick_label.setText("%d개 선택  —  누르면 체크 / 해제" % n if n else "체크할 아이디어를 누르세요")
+        self.pick_status.setEnabled(bool(n))
+        self.pick_del.setEnabled(bool(n))
 
 
 # ---------------------------------------------------------------- 오른쪽: 아이디어
@@ -535,7 +725,7 @@ class IdeaPage(QWidget):
     changed = Signal(str)        # 저장했음 (uid)
     deleteRequested = Signal(str)
 
-    def __init__(self, store_, parent=None):
+    def __init__(self, store_, data_dir, parent=None):
         super().__init__(parent)
         self.store = store_
         self.uid = None
@@ -573,8 +763,22 @@ class IdeaPage(QWidget):
         self.link_btn = LinkButton(self.store)
         self.link_btn.changed.connect(self.changed)
 
+        self.dev_btn = QToolButton()
+        self.dev_btn.setText("💻 개발")
+        self.dev_btn.setCheckable(True)
+        self.dev_btn.setToolTip("개발할 앱·프로그램이면 켜요.\n"
+                                "'개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
+                                "기능마다 '확인하는 법' 칸이 생겨요. 꺼도 적어 둔 내용은 그대로 있어요.")
+        self.dev_btn.setStyleSheet(
+            "QToolButton { padding:4px 10px; border:1px solid %s; border-radius:12px; color:%s; }"
+            "QToolButton:hover { border-color:%s; }"
+            "QToolButton:checked { background:%s; border-color:%s; color:%s; }"
+            % (theme.BORDER, theme.TEXT_DIM, theme.ACCENT, theme.ITEM_SEL, theme.ACCENT, theme.TEXT))
+        self.dev_btn.toggled.connect(self._toggle_dev)
+
         head = QHBoxLayout()
         head.addWidget(self.title, 1)
+        head.addWidget(self.dev_btn, 0, Qt.AlignVCenter)
         head.addWidget(self.link_btn, 0, Qt.AlignVCenter)
         head.addWidget(more, 0, Qt.AlignTop)
 
@@ -612,6 +816,10 @@ class IdeaPage(QWidget):
             lambda d, n: self.tabs.setTabText(self.tabs.indexOf(self.features),
                                               "필요한 기능  %d/%d" % (d, n) if n else "필요한 기능"))
         self.tabs.addTab(self.features, "필요한 기능")
+        self.devview = DevView(self.store, data_dir)
+        self.devview.changed.connect(self._dev_changed)
+        self.features.changed.connect(lambda _u: self.devview.refresh())
+        self.tabs.addTab(self.devview, "💻 개발")
         self.memos = MemoView(self.store, self.brief.section_titles)
         self.memos.changed.connect(self.changed)
         self.memos.countChanged.connect(
@@ -657,6 +865,13 @@ class IdeaPage(QWidget):
         self.urgency.setValue(row["urgency"])
         self.start.setValue(row["start_date"])
         self.due.setValue(row["due_date"])
+        dev = bool(row["dev"])
+        self.dev_btn.setChecked(dev)
+        self.tabs.setTabVisible(self.tabs.indexOf(self.devview), dev)
+        if not dev and self.tabs.currentWidget() is self.devview:
+            self.tabs.setCurrentWidget(self.brief)
+        self.features.set_dev(dev)
+        self.devview.load(uid)
         self.brief.load(uid)
         self.features.load(uid)
         self.memos.load(uid)
@@ -691,6 +906,38 @@ class IdeaPage(QWidget):
                           due_date=self.due.value())
         self._update_badge()
         self.changed.emit(self.uid)
+
+    def _toggle_dev(self, on):
+        if self._loading or not self.uid:
+            return
+        self.flush()
+        self.store.update(self.uid, dev=1 if on else 0)
+        if on:
+            have = {s["key"] for s in self.store.sections(self.uid)}
+            missing = [label for key, label, _h in store.DEV_SECTIONS if key not in have]
+            if missing and QMessageBox.question(
+                    self, "개발 프로젝트",
+                    "기획서에 개발할 때 정해 두면 좋은 칸 %d개를 넣을까요?\n\n%s\n\n(필요 없으면 나중에 지워도 돼요)"
+                    % (len(missing), "\n".join("· " + m for m in missing))) == QMessageBox.Yes:
+                self.store.add_dev_sections(self.uid)
+                self.brief.load(self.uid, keep_scroll=True)
+                self._update_progress()
+        self.features.set_dev(on)
+        self.features.load(self.uid, keep_scroll=True)
+        self.tabs.setTabVisible(self.tabs.indexOf(self.devview), on)
+        self.devview.refresh()
+        if on:
+            self.tabs.setCurrentWidget(self.devview)
+        self.changed.emit(self.uid)
+
+    def _dev_changed(self, uid):
+        """개발 탭에서 바뀜 (개발 시작 → 상태 '개발 중' 등)."""
+        row = self.store.get(uid)
+        if row is not None and uid == self.uid:
+            self._loading = True
+            self.status.setValue(row["status"])
+            self._loading = False
+        self.changed.emit(uid)
 
     def _update_progress(self):
         done, total = self.brief.counts()
@@ -827,7 +1074,7 @@ class MainWindow(QMainWindow):
 
         self.sidebar = Sidebar(self.store)
         self.dashboard = DashboardPage(self.store)
-        self.page = IdeaPage(self.store)
+        self.page = IdeaPage(self.store, data_dir)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.dashboard)
         self.stack.addWidget(self.page)
@@ -847,7 +1094,8 @@ class MainWindow(QMainWindow):
         self.sidebar.todosRequested.connect(self.open_todos)
         self.sidebar.appAction.connect(self._app_action)
         self.sidebar.ideaSelected.connect(self.open_idea)
-        self.sidebar.deleteRequested.connect(self.delete_idea)
+        self.sidebar.bulkStatus.connect(self.set_status_many)
+        self.sidebar.bulkDelete.connect(self.delete_ideas)
         self.page.changed.connect(self._idea_changed)
         self.page.deleteRequested.connect(self.delete_idea)
         self.dashboard.opened.connect(self.open_idea)
@@ -900,25 +1148,43 @@ class MainWindow(QMainWindow):
             return
         v = dlg.values()
         uid = self.store.create(v.pop("title"), **v)
+        if v.get("dev"):
+            self.store.add_dev_sections(uid)
         self.sidebar.search.clear()
         self.sidebar.refresh(uid)
         self.open_idea(uid)
         self._refresh_gantt()
 
     def delete_idea(self, uid):
-        row = self.store.get(uid)
-        if row is None:
+        self.delete_ideas([uid])
+
+    def delete_ideas(self, uids):
+        self.page.flush()
+        rows = [r for r in (self.store.get(u) for u in uids) if r is not None]
+        if not rows:
             return
-        ans = QMessageBox.question(self, "삭제", "'%s' 아이디어를 삭제할까요?\n기획서와 메모도 함께 사라져요."
-                                   % (row["title"] or "(제목 없음)"))
-        if ans != QMessageBox.Yes:
+        if len(rows) == 1:
+            msg = "'%s' 아이디어를 삭제할까요?" % (rows[0]["title"] or "(제목 없음)")
+        else:
+            names = "\n".join("· " + (r["title"] or "(제목 없음)") for r in rows[:8])
+            more = "\n… 외 %d개" % (len(rows) - 8) if len(rows) > 8 else ""
+            msg = "아이디어 %d개를 삭제할까요?\n\n%s%s\n" % (len(rows), names, more)
+        if QMessageBox.question(self, "삭제", msg + "\n기획서와 메모도 함께 사라져요.") != QMessageBox.Yes:
             return
-        if self.page.uid == uid:
+        gone = {r["uuid"] for r in rows}
+        if self.page.uid in gone:
             self.page.uid = None
-        self.store.delete(uid)
-        self.sidebar.refresh()
-        self.show_dashboard()
-        self._refresh_gantt()
+        self.store.delete_many(sorted(gone))
+        self.sidebar.end_pick()
+        if self.stack.currentWidget() is self.page and self.page.uid is None:
+            self.show_dashboard()
+        self._after_remote_change(gone)
+
+    def set_status_many(self, uids, status):
+        self.page.flush()
+        self.store.set_status_many(uids, status)
+        self.sidebar.end_pick()
+        self._after_remote_change(set(uids))
 
     def _idea_changed(self, uid):
         self.sidebar.refresh(uid)
