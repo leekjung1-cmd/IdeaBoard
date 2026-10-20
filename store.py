@@ -8,7 +8,16 @@ import sqlite3
 import time
 import uuid
 
-STATUSES = ["아이디어", "기획", "개발 중", "완료", "보류"]
+# 상태 (v1.6.0~): 진행 중은 ACTIVE_LIMIT 개까지만. 새 아이디어는 보관함에서 시작.
+STATUSES = ["보관함", "진행 중", "완료", "보류"]
+ACTIVE = "진행 중"
+ACTIVE_LIMIT = 3
+# 예전 상태 이름 → 지금 이름 (예전 파일·예전 폰 앱에서 온 값도 이걸로 바꿔 받음)
+OLD_STATUS = {"아이디어": "보관함", "기획": "보관함", "개발 중": "진행 중"}
+
+
+def norm_status(st):
+    return OLD_STATUS.get(st, st)
 CATEGORIES = ["일상", "취미", "업무", "공용"]     # 용도 기본 목록 (직접 입력한 것도 쓸 수 있음)
 LEVELS = [1, 2, 3, 4, 5]          # 중요도·긴급도
 HIGH = 4                          # 이 값 이상이면 '높음'
@@ -44,17 +53,18 @@ DEV_SECTIONS = [
 ]
 
 IDEA_COLUMNS = ("title", "summary", "status", "category", "importance", "urgency",
-                "start_date", "due_date", "dev", "dev_folder")
+                "start_date", "due_date", "dev", "dev_folder", "next_step")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ideas(
     uuid TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT '아이디어',
+    status TEXT NOT NULL DEFAULT '보관함',
     category TEXT NOT NULL DEFAULT '',      -- 용도 (일상/취미/업무/공용/직접 입력), '' = 안 정함
     dev INTEGER NOT NULL DEFAULT 0,         -- 1 = 개발 프로젝트 (개발 탭·완성 기준 등을 보여줌)
     dev_folder TEXT NOT NULL DEFAULT '',    -- 개발 시작 때 만든 폴더 (PC)
+    next_step TEXT NOT NULL DEFAULT '',     -- 다음 한 걸음: 30분 안에 끝낼 다음 행동 1개
     importance INTEGER,             -- 1~5, NULL = 미정
     urgency INTEGER,                -- 1~5, NULL = 미정
     start_date TEXT,                -- 'YYYY-MM-DD' 또는 NULL
@@ -141,7 +151,8 @@ FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 # 2 = v1.2.1 (동기화 표마다 pc_seen: PC가 그 행을 받거나 합친 시각 → 폰 여러 대가 서로의 변경을 놓치지 않게)
 # 3 = v1.3.0 (할일 todos)
 # 4 = v1.5.0 (개발 프로젝트: ideas.dev·dev_folder, features.criteria)
-SCHEMA_VERSION = 4
+# 5 = v1.6.0 (ideas.next_step, 상태 이름 바꿈: 아이디어·기획 → 보관함, 개발 중 → 진행 중)
+SCHEMA_VERSION = 5
 
 
 def now_ms():
@@ -184,6 +195,12 @@ class Store:
             self.db.execute("ALTER TABLE ideas ADD COLUMN dev_folder TEXT NOT NULL DEFAULT ''")
         if "criteria" not in {r["name"] for r in self.db.execute("PRAGMA table_info(features)")}:
             self.db.execute("ALTER TABLE features ADD COLUMN criteria TEXT NOT NULL DEFAULT ''")
+        if "next_step" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
+        if ver < 5:
+            # 상태 이름만 바꿈 (고친 시각은 그대로 → 폰과 주고받을 때 괜히 '바뀜'으로 안 잡힘. 폰 앱도 같은 규칙으로 바꿔 읽음)
+            for old, new in OLD_STATUS.items():
+                self.db.execute("UPDATE ideas SET status=? WHERE status=?", (new, old))
         for t in self.SYNC_TABLES:
             if "pc_seen" not in {r["name"] for r in self.db.execute("PRAGMA table_info(%s)" % t)}:
                 self.db.execute("ALTER TABLE %s ADD COLUMN pc_seen INTEGER NOT NULL DEFAULT 0" % t)
@@ -227,8 +244,8 @@ class Store:
     def create(self, title, **fields):
         uid = str(uuid.uuid4())
         t = now_ms()
-        self.db.execute("INSERT INTO ideas(uuid, title, created_at, updated_at) VALUES(?,?,?,?)",
-                        (uid, title.strip(), t, t))
+        self.db.execute("INSERT INTO ideas(uuid, title, status, created_at, updated_at) VALUES(?,?,?,?,?)",
+                        (uid, title.strip(), STATUSES[0], t, t))
         if fields:
             self._set(uid, fields, t)
         self._default_sections(uid, {}, t)
@@ -255,6 +272,27 @@ class Store:
         t = now_ms()
         self.db.executemany("UPDATE ideas SET deleted=1, updated_at=? WHERE uuid=?", [(t, u) for u in uids])
         self.db.commit()
+
+    # ---------- 진행 중 (최대 ACTIVE_LIMIT 개) · 다음 한 걸음 ----------
+    def active_ideas(self):
+        return self.db.execute("SELECT * FROM ideas WHERE deleted=0 AND status=? ORDER BY updated_at",
+                               (ACTIVE,)).fetchall()
+
+    def room_needed(self, uids, new=0):
+        """uids(+새로 만들 new 개)를 진행 중으로 올리려면 더 비워야 할 자리 수 (0 = 바로 가능)."""
+        active = {r["uuid"] for r in self.active_ideas()}
+        adding = len(set(uids) - active) + new
+        return max(0, len(active) + adding - ACTIVE_LIMIT) if adding else 0
+
+    def finish_step(self, uid):
+        """다음 한 걸음 끝냄: 메모에 기록하고 칸을 비움. 돌려주는 값: 끝낸 글 (없으면 '')"""
+        row = self.get(uid)
+        step = (row["next_step"] if row is not None else "").strip()
+        if not step:
+            return ""
+        self.add_memo(uid, "✅ 한 걸음 끝: " + step)
+        self.update(uid, next_step="")
+        return step
 
     def set_status_many(self, uids, status):
         """여러 아이디어 상태를 한꺼번에. 이미 그 상태인 건 건드리지 않음."""
@@ -495,6 +533,9 @@ class Store:
 
     def _merge_row(self, table, keys, cols, row):
         """행 하나 합치기: 없으면 추가, 있으면 더 최근에 고친 쪽이 남음. 돌려주는 값: 'added' | 'changed' | None"""
+        if table == "ideas" and "status" in cols:
+            row = {c: row[c] for c in cols}
+            row["status"] = norm_status(row["status"])
         where = " AND ".join("%s=?" % k for k in keys)
         key_vals = [row[k] for k in keys]
         cur = self.db.execute("SELECT updated_at FROM %s WHERE %s" % (table, where), key_vals).fetchone()

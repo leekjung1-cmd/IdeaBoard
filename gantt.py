@@ -266,7 +266,7 @@ class GanttCanvas(QWidget):
                 p.drawEllipse(QRectF(14, y + ROW_H / 2 - 4, 8, 8))
             right = LEFT_W - 10
             st = r["status"]
-            if st != "아이디어":
+            if st != "보관함":
                 sw = fm.horizontalAdvance(st)
                 p.setPen(QColor(theme.TEXT_DIM))
                 p.drawText(QRectF(right - sw, y, sw, ROW_H), Qt.AlignVCenter | Qt.AlignRight, st)

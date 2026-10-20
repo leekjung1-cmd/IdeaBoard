@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 import export
 import theme
-from store import FEATURE_PRIORITIES
+from store import ACTIVE, FEATURE_PRIORITIES, STATUSES
 
 # 기능 중요도 = 만드는 단계
 STAGES = {"필수": "1단계 · 필수 (첫 버전)", "있으면 좋음": "2단계 · 있으면 좋음", "나중에": "3단계 · 나중에"}
@@ -386,8 +386,8 @@ class DevView(QWidget):
             return
         self.store.update(self.uid, dev_folder=folder)
         r = self.store.get(self.uid)
-        if r["status"] in ("아이디어", "기획"):
-            self.store.update(self.uid, status="개발 중")
+        if r["status"] == STATUSES[0] and self.store.room_needed([self.uid]) == 0:
+            self.store.update(self.uid, status=ACTIVE)      # 보관함 → 진행 중 (자리가 있을 때만)
         self.refresh()
         self.changed.emit(self.uid)
         QMessageBox.information(self, "개발 시작", "만들었어요: %s\n%s\n\n클로드 코드에서 이 폴더를 열고 시작하면 돼요."

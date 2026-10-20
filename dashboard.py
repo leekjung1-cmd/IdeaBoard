@@ -6,7 +6,7 @@ from datetime import date, datetime
 from html import escape
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QToolTip, QVBoxLayout,
     QWidget,
@@ -14,11 +14,16 @@ from PySide6.QtWidgets import (
 
 import theme
 from todo import PAPER, dday as todo_dday
-from store import HIGH, QUADRANTS, quadrant
+from store import ACTIVE, ACTIVE_LIMIT, HIGH, QUADRANTS, STATUSES, quadrant
 
 LEVELS = 5
 CHIP_H = 24
+CHIP_H2 = 40        # 다음 한 걸음이 있는 칩 (두 줄)
 CHIP_GAP = 4
+
+
+def chip_h(r):
+    return CHIP_H2 if r is not None and r["next_step"] else CHIP_H
 
 
 def _rgba(hex_, a):
@@ -104,14 +109,25 @@ class MatrixChart(QWidget):
 
         for (imp, urg), rows in cells.items():
             cell = self.cell_rect(imp, urg).adjusted(4, 4, -4, -4)
-            fit = max(1, (cell.height() + CHIP_GAP) // (CHIP_H + CHIP_GAP))
-            shown, hidden = (rows, []) if len(rows) <= fit else (rows[:fit - 1], rows[fit - 1:])
-            n = len(shown) + (1 if hidden else 0)
-            y = cell.center().y() - (n * CHIP_H + (n - 1) * CHIP_GAP) // 2
+
+            def height(rs, more):
+                hs = [chip_h(r) for r in rs] + ([CHIP_H] if more else [])
+                return sum(hs) + CHIP_GAP * max(0, len(hs) - 1)
+
+            shown, hidden = list(rows), []
+            while len(shown) > 1 and height(shown, bool(hidden)) > cell.height():
+                hidden.insert(0, shown.pop())
+            if hidden and len(shown) == 1 and height(shown, True) > cell.height():
+                shown, hidden = [], list(rows)
+            y = cell.center().y() - height(shown, bool(hidden)) // 2
             for r in shown:
-                w = self._chip_width(r["title"] or "(제목 없음)", cell.width())
-                self.chips.append(Chip(QRect(cell.center().x() - w // 2, y, w, CHIP_H), row=r))
-                y += CHIP_H + CHIP_GAP
+                text = r["title"] or "(제목 없음)"
+                if r["next_step"]:
+                    text = max(text, "👣 " + r["next_step"], key=len)
+                w = self._chip_width(text, cell.width())
+                h = chip_h(r)
+                self.chips.append(Chip(QRect(cell.center().x() - w // 2, y, w, h), row=r))
+                y += h + CHIP_GAP
             if hidden:
                 w = self._chip_width("+%d개 더" % len(hidden), cell.width())
                 self.chips.append(Chip(QRect(cell.center().x() - w // 2, y, w, CHIP_H), more=hidden))
@@ -232,18 +248,31 @@ class MatrixChart(QWidget):
         r = c.row
         q = quadrant(r["importance"], r["urgency"])
         col = theme.QUAD[q]
-        p.setPen(QPen(_rgba(col, 230 if hover else 150), 1.2))
+        active = r["status"] == ACTIVE
+        p.setPen(QPen(QColor(theme.ACCENT) if active and not hover else _rgba(col, 230 if hover else 150),
+                      1.8 if active else 1.2))
         p.setBrush(QColor(theme.ITEM_SEL if hover else "#2a2b2e"))
-        p.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), CHIP_H / 2, CHIP_H / 2)
-        dot = QRectF(rect.left() + 9, rect.center().y() - 3.5, 8, 8)
+        two = rect.height() > CHIP_H
+        radius = 9 if two else CHIP_H / 2
+        p.drawRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+        top = QRect(rect.left(), rect.top() + (2 if two else 0), rect.width(), CHIP_H - (4 if two else 0))
+        dot = QRectF(rect.left() + 9, top.center().y() - 3.5, 8, 8)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(col))
         p.drawEllipse(dot)
         dim = r["status"] in ("보류",)
         p.setPen(QColor(theme.TEXT_DIM if dim else theme.TEXT))
-        tr = rect.adjusted(22, 0, -10, 0)
-        p.drawText(tr, Qt.AlignVCenter | Qt.AlignLeft,
-                   self.fontMetrics().elidedText(r["title"] or "(제목 없음)", Qt.ElideRight, tr.width()))
+        tr = top.adjusted(22, 0, -10, 0)
+        fm = self.fontMetrics()
+        p.drawText(tr, Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(r["title"] or "(제목 없음)", Qt.ElideRight, tr.width()))
+        if two:     # 둘째 줄: 다음 한 걸음
+            sr = QRect(rect.left() + 10, top.bottom() - 1, rect.width() - 18, rect.bottom() - top.bottom() - 2)
+            f = p.font()
+            f.setPointSizeF(f.pointSizeF() - 1)
+            p.setFont(f)
+            p.setPen(QColor(theme.TEXT_DIM))
+            p.drawText(sr, Qt.AlignVCenter | Qt.AlignLeft,
+                       QFontMetrics(f).elidedText("👣 " + r["next_step"], Qt.ElideRight, sr.width()))
         if r["due_date"] and r["due_date"] <= date.today().isoformat():     # 목표일 오늘이거나 지남
             p.setPen(QPen(QColor(theme.BASE), 1.5))
             p.setBrush(QColor(theme.DANGER))
@@ -313,6 +342,8 @@ class MatrixChart(QWidget):
                 lines = [r["title"] or "(제목 없음)"]
                 if r["summary"]:
                     lines.append(r["summary"])
+                if r["next_step"]:
+                    lines.append("👣 다음 한 걸음: " + r["next_step"])
                 info = "상태: %s" % r["status"] + ("  ·  용도: %s" % r["category"] if r["category"] else "")
                 if r["importance"] is not None:
                     info += "  ·  중요도 %d  ·  긴급도 %d" % (r["importance"], r["urgency"])
@@ -356,7 +387,7 @@ def ago(ms, today):
 class ScheduleRow(QFrame):
     clicked = Signal(str)
 
-    def __init__(self, row, badge, color, sub, parent=None):
+    def __init__(self, row, badge, color, sub, parent=None, step=True):
         super().__init__(parent)
         self.uid = row["uuid"]
         self.setObjectName("srow")
@@ -382,7 +413,20 @@ class ScheduleRow(QFrame):
         lay.setContentsMargins(8, 5, 8, 5)
         lay.setSpacing(1)
         lay.addLayout(top)
-        lay.addWidget(date_)
+        if sub:
+            lay.addWidget(date_)
+        self._step = None
+        if step and row["next_step"]:
+            self._step = QLabel()
+            self._step.setMinimumWidth(10)
+            self._step.setStyleSheet("color:%s;" % theme.TEXT)
+            self._step_full = "👣 " + row["next_step"]
+            self._step.setToolTip(self._step_full)
+            lay.addWidget(self._step)
+        elif step and row["status"] == ACTIVE:
+            warn = QLabel("👣 다음 한 걸음을 적어 주세요")
+            warn.setStyleSheet("color:%s;" % theme.QUAD[3])
+            lay.addWidget(warn)
         self._title = title
         self._full = row["title"] or "(제목 없음)"
 
@@ -390,6 +434,8 @@ class ScheduleRow(QFrame):
         super().resizeEvent(ev)
         fm = self._title.fontMetrics()
         self._title.setText(fm.elidedText(self._full, Qt.ElideRight, max(20, self._title.width())))
+        if self._step is not None:
+            self._step.setText(fm.elidedText(self._step_full, Qt.ElideRight, max(20, self.width() - 20)))
 
     def mouseReleaseEvent(self, ev):
         if ev.button() == Qt.LeftButton and self.rect().contains(ev.position().toPoint()):
@@ -454,7 +500,27 @@ class SchedulePanel(QFrame):
             lay.addWidget(w)
 
         def status(r):
-            return [] if r["status"] == "아이디어" else [escape(r["status"])]
+            return [] if r["status"] == STATUSES[0] else [escape(r["status"])]
+
+        # 진행 중 (최대 ACTIVE_LIMIT 개): 지금 손대고 있는 것과 그 다음 한 걸음
+        active = sorted((r for r in rows if r["status"] == ACTIVE), key=lambda r: r["activity"])
+        over = len(active) > ACTIVE_LIMIT
+        lb = QLabel("진행 중  %d / %d" % (len(active), ACTIVE_LIMIT) +
+                    ("  — 너무 많아요! 하나를 완료·보류로" if over else ""))
+        lb.setWordWrap(True)
+        lb.setStyleSheet("color:%s; font-weight:bold; padding:4px 4px 2px 4px;"
+                         % (theme.DANGER if over else theme.ACCENT))
+        lay.addWidget(lb)
+        if not active:
+            e = QLabel("진행 중인 아이디어가 없어요. 하나를 골라 상태를 '진행 중'으로 바꾸고 다음 한 걸음을 적어 보세요.")
+            e.setWordWrap(True)
+            e.setStyleSheet("color:%s; padding:2px 4px 6px 4px;" % theme.TEXT_DIM)
+            lay.addWidget(e)
+        for r in active:
+            _n, text, c = ago(r["activity"], today)
+            w = ScheduleRow(r, "", theme.ACCENT, "<span style='color:%s'>%s</span>" % (c, text))
+            w.clicked.connect(self.opened)
+            lay.addWidget(w)
 
         if due:
             section("목표일")

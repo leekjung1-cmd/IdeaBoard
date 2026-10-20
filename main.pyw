@@ -29,6 +29,7 @@ from widgets import DateField
 from brief import BriefView
 from dashboard import DashboardPage
 from devkit import DevView
+import focus
 from gantt import GanttWindow
 import export
 from features import FeatureView
@@ -36,7 +37,7 @@ from links import LinkButton
 from phone import PhoneDialog
 from todo import TodoWindow
 from memos import MemoView
-from store import QUADRANTS, STATUSES, quadrant
+from store import ACTIVE, QUADRANTS, STATUSES, quadrant
 
 APP_DIR = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
            else os.path.dirname(os.path.abspath(__file__)))
@@ -181,13 +182,18 @@ class NewIdeaDialog(QDialog):
         form.addRow("긴급도", self.urgency)
         form.addRow("시작 예정일", self.start)
         form.addRow("목표 완료일", self.due)
+        self.next_step = QLineEdit()
+        self.next_step.setPlaceholderText("30분 안에 끝낼 다음 행동 1개 (나중에 적어도 돼요)")
+        form.addRow("👣 다음 한 걸음", self.next_step)
         self.dev = QCheckBox("💻  개발할 앱·프로그램이에요")
         self.dev.setToolTip("켜면 '개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
                             "기능마다 '확인하는 법' 칸이 생겨요. 나중에 아이디어 화면에서 켜고 꺼도 돼요.")
         form.addRow("", self.dev)
 
         hint = QLabel("중요도·긴급도가 %d 이상이면 '높음'으로 보고 대시보드 4분면에 놓아요.\n"
-                      "잘 모르겠으면 '미정'으로 두고 나중에 정해도 돼요." % store.HIGH)
+                      "잘 모르겠으면 '미정'으로 두고 나중에 정해도 돼요.\n"
+                      "'진행 중'은 %d개까지만 둘 수 있어요. 새 아이디어는 보통 '보관함'에 넣어 두세요."
+                      % (store.HIGH, store.ACTIVE_LIMIT))
         hint.setStyleSheet("color:%s;" % theme.TEXT_DIM)
         hint.setWordWrap(True)
 
@@ -213,7 +219,8 @@ class NewIdeaDialog(QDialog):
                     status=self.status.value(), category=self.category.value(),
                     importance=self.importance.value(),
                     urgency=self.urgency.value(), start_date=self.start.value(),
-                    due_date=self.due.value(), dev=1 if self.dev.isChecked() else 0)
+                    due_date=self.due.value(), dev=1 if self.dev.isChecked() else 0,
+                    next_step=self.next_step.text().strip())
 
 
 # ---------------------------------------------------------------- 왼쪽 목록
@@ -267,7 +274,7 @@ class IdeaDelegate(QStyledItemDelegate):
         right = r.right() - 10
         if status and status != STATUSES[0]:
             sw = fm.horizontalAdvance(status)
-            p.setPen(QColor(theme.TEXT_DIM))
+            p.setPen(QColor(theme.ACCENT if status == ACTIVE else theme.TEXT_DIM))
             p.drawText(QRect(right - sw, r.top(), sw, r.height()), Qt.AlignVCenter | Qt.AlignRight, status)
             right -= sw + 10
         cat = index.data(CAT_ROLE) or ""
@@ -789,6 +796,9 @@ class IdeaPage(QWidget):
         self.start = DateField()
         self.due = DateField()
         self.badge = QLabel()
+        self.step = focus.NextStepBar(self.store)
+        self.step.changed.connect(self.changed)
+        self.step.finished.connect(lambda uid: self.memos.load(uid))
 
         # 두 줄: 상태·중요도·긴급도(+사분면) / 일정
         meta = QGridLayout()
@@ -835,7 +845,9 @@ class IdeaPage(QWidget):
         lay.addWidget(self.summary)
         lay.addSpacing(6)
         lay.addLayout(meta)
-        lay.addSpacing(10)
+        lay.addSpacing(8)
+        lay.addWidget(self.step)
+        lay.addSpacing(6)
         lay.addWidget(self.tabs, 1)
 
         # 글자는 멈추고 0.5초 뒤 저장, 나머지는 바로 저장
@@ -876,6 +888,7 @@ class IdeaPage(QWidget):
         self.features.load(uid)
         self.memos.load(uid)
         self.link_btn.load(uid)
+        self.step.load(uid)
         self._loading = False
         self._update_badge()
         self._update_progress()
@@ -889,6 +902,7 @@ class IdeaPage(QWidget):
         if self._loading or not self.uid:
             return
         self.brief.flush()
+        self.step.flush()
         row = self.store.get(self.uid)
         if row is None:
             return
@@ -900,11 +914,19 @@ class IdeaPage(QWidget):
     def _save_meta(self):
         if self._loading or not self.uid:
             return
+        before = self.store.get(self.uid)["status"]
+        if self.status.value() == ACTIVE and before != ACTIVE and not focus.ensure_room(self, self.store, [self.uid]):
+            self._loading = True        # 자리가 없어 못 올림 → 원래 상태로
+            self.status.setValue(before)
+            self._loading = False
         self.store.update(self.uid, status=self.status.value(), category=self.category.value(),
                           importance=self.importance.value(),
                           urgency=self.urgency.value(), start_date=self.start.value(),
                           due_date=self.due.value())
         self._update_badge()
+        self.step._style()
+        if self.status.value() == ACTIVE and before != ACTIVE and not self.step.edit.text().strip():
+            self.step.edit.setFocus()       # 진행 중으로 올렸으면 다음 한 걸음부터
         self.changed.emit(self.uid)
 
     def _toggle_dev(self, on):
@@ -931,12 +953,13 @@ class IdeaPage(QWidget):
         self.changed.emit(self.uid)
 
     def _dev_changed(self, uid):
-        """개발 탭에서 바뀜 (개발 시작 → 상태 '개발 중' 등)."""
+        """개발 탭에서 바뀜 (개발 시작 → 상태 '진행 중' 등)."""
         row = self.store.get(uid)
         if row is not None and uid == self.uid:
             self._loading = True
             self.status.setValue(row["status"])
             self._loading = False
+            self.step._style()
         self.changed.emit(uid)
 
     def _update_progress(self):
@@ -1147,6 +1170,9 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             return
         v = dlg.values()
+        if v["status"] == ACTIVE and not focus.ensure_room(self, self.store, new=1):
+            v["status"] = STATUSES[0]
+            QMessageBox.information(self, "새로운 아이디어", "진행 중 자리가 없어서 '%s'에 넣었어요." % STATUSES[0])
         uid = self.store.create(v.pop("title"), **v)
         if v.get("dev"):
             self.store.add_dev_sections(uid)
@@ -1182,6 +1208,9 @@ class MainWindow(QMainWindow):
 
     def set_status_many(self, uids, status):
         self.page.flush()
+        if status == ACTIVE and not focus.ensure_room(self, self.store, uids):
+            self._after_remote_change(set())        # 정리 창에서 다른 걸 내렸을 수 있음
+            return
         self.store.set_status_many(uids, status)
         self.sidebar.end_pick()
         self._after_remote_change(set(uids))
