@@ -1405,6 +1405,8 @@ class MainWindow(QMainWindow):
             self.dashboard.refresh()
         self._refresh_gantt()
         self._todos_changed()
+        if getattr(self, "timetable", None) is not None and self.timetable.isVisible():
+            self.timetable.refresh()        # 폰에서 시간표를 바꿨을 수도
 
     def import_data(self):
         """다른 ideas.db(예전 폴더·백업·다른 PC)를 지금 데이터에 합친다."""
