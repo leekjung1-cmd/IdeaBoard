@@ -174,7 +174,7 @@ class MatrixChart(QWidget):
             4: QRectF(plot.left(), split_y, split_x - plot.left(), plot.bottom() - split_y),
         }
         for q, r in regions.items():
-            p.fillRect(r, _rgba(theme.QUAD[q], 18 if theme.DARK else 14))
+            p.fillRect(r, _rgba(theme.QUAD[q], 30 if theme.DARK else 16))
         # 사분면 이름 (바깥쪽 모서리)
         f = QFont(self.font())
         f.setBold(True)

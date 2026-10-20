@@ -1,7 +1,7 @@
 """색·모서리·글꼴은 전부 여기서. 두 가지 모양:
 
-- dark  = '차분한 작업실': 따뜻한 먹색 바탕 + 세이지 초록 한 색
-- light = '미니멀 그리드': 흰 바탕 + 굵은 글자 + 각진 선 + 주황 신호색
+- dark  = '블루 다크': 남색 도는 검정 + 선명한 파랑
+- light = '화이트 블루': 밝은 회백색 바탕 + 흰 카드 + 파랑
 
 설정(settings.json 의 "theme": auto / dark / light)을 따르고, auto 면 윈도우의 앱 모드(다크/라이트)를 따름.
 바꾸면 프로그램을 다시 켜야 적용됨 (모든 화면이 켤 때 색을 읽어 감).
@@ -17,22 +17,22 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QStyleFactory, QWidget
 
 DARK = dict(
-    WINDOW="#1c1b19", BASE="#161513", ALT="#201f1c", PANEL="#24231f", BORDER="#33312d", LINE="#2a2925",
-    TEXT="#e8e4dc", TEXT_DIM="#9a958b", TEXT_OFF="#6f6b62",
-    ACCENT="#9db58a", ON_ACCENT="#1c1b19", HIGHLIGHT="#3a4433",
-    SIDEBAR="#161513", ITEM_HOVER="#22211e", ITEM_SEL="#2b2a25", CHIP="#24231f", BUTTON_HOVER="#2e2c28",
-    DANGER="#e07a5f", GOOD="#9db58a", STAR="#d4a85a", STRONG="#33312d",
-    QUAD={1: "#d9735b", 2: "#86a9c4", 3: "#d4a85a", 4: "#8a867d", 0: "#5a5750"},
-    RADIUS=10, SQUARE=False, MINIMAL=False, DARK=True, FIELD="#161513", BUTTON="#26251f",
+    WINDOW="#0e1116", BASE="#0b0e13", ALT="#121620", PANEL="#181d26", BORDER="#273041", LINE="#1e2533",
+    TEXT="#f2f5fa", TEXT_DIM="#98a2b3", TEXT_OFF="#667085",
+    ACCENT="#4c8dff", ON_ACCENT="#ffffff", HIGHLIGHT="#1a2b4a",
+    SIDEBAR="#0b0e13", ITEM_HOVER="#161b24", ITEM_SEL="#1c2638", CHIP="#181d26", BUTTON_HOVER="#202736",
+    DANGER="#ff6b6b", GOOD="#34d399", STAR="#ffc24b", STRONG="#273041",
+    QUAD={1: "#ff6b6b", 2: "#4c8dff", 3: "#ffc24b", 4: "#98a2b3", 0: "#5b6476"},
+    RADIUS=12, SQUARE=False, MINIMAL=False, DARK=True, FIELD="#0b0e13", BUTTON="#181d26",
 )
 LIGHT = dict(
-    WINDOW="#ffffff", BASE="#ffffff", ALT="#fafafa", PANEL="#f7f7f7", BORDER="#e6e6e6", LINE="#efefef",
-    TEXT="#111111", TEXT_DIM="#6b6b6b", TEXT_OFF="#a8a8a8",
-    ACCENT="#ff4f12", ON_ACCENT="#ffffff", HIGHLIGHT="#ffe3d8",
-    SIDEBAR="#fbfbfb", ITEM_HOVER="#f3f3f3", ITEM_SEL="#fff1eb", CHIP="#ffffff", BUTTON_HOVER="#f3f3f3",
-    DANGER="#d92d20", GOOD="#1f7a3a", STAR="#d99a00", STRONG="#111111",
-    QUAD={1: "#ff4f12", 2: "#2563eb", 3: "#d99a00", 4: "#9a9a9a", 0: "#c8c8c8"},
-    RADIUS=10, SQUARE=False, MINIMAL=True, DARK=False, FIELD="#ffffff", BUTTON="#ffffff",
+    WINDOW="#f7f8fa", BASE="#ffffff", ALT="#f2f4f6", PANEL="#ffffff", BORDER="#e5e8eb", LINE="#eef0f3",
+    TEXT="#191f28", TEXT_DIM="#6b7684", TEXT_OFF="#b0b8c1",
+    ACCENT="#3182f6", ON_ACCENT="#ffffff", HIGHLIGHT="#e8f1fe",
+    SIDEBAR="#ffffff", ITEM_HOVER="#f2f4f6", ITEM_SEL="#e8f1fe", CHIP="#ffffff", BUTTON_HOVER="#f2f4f6",
+    DANGER="#f04452", GOOD="#14b866", STAR="#ffb200", STRONG="#191f28",
+    QUAD={1: "#f04452", 2: "#3182f6", 3: "#ffb200", 4: "#8b95a1", 0: "#c4cad3"},
+    RADIUS=12, SQUARE=False, MINIMAL=False, DARK=False, FIELD="#ffffff", BUTTON="#ffffff",
 )
 
 

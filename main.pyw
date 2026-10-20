@@ -346,10 +346,8 @@ class Sidebar(QWidget):
             #sectionLabel {{ color:{dim}; padding:10px 14px 4px 14px; }}
         """.format(bg=theme.SIDEBAR, hover=theme.ITEM_HOVER, sel=theme.ITEM_SEL, panel=theme.PANEL,
                    border=theme.BORDER, accent=theme.ACCENT, dim=theme.TEXT_DIM,
-                   newbg=theme.STRONG if theme.MINIMAL else theme.PANEL,
-                   newfg=theme.ON_ACCENT if theme.MINIMAL else theme.TEXT,
-                   newborder=theme.STRONG if theme.MINIMAL else theme.BORDER,
-                   newhover=theme.ACCENT if theme.MINIMAL else theme.ITEM_HOVER))
+                   newbg=theme.ACCENT, newfg=theme.ON_ACCENT, newborder=theme.ACCENT,      # 새 아이디어 = 파란 단추
+                   newhover=theme.ACCENT))
 
         name = QLabel("IDEA/BOARD" if theme.MINIMAL else "아이디어 보드")
         f = name.font()
@@ -378,7 +376,7 @@ class Sidebar(QWidget):
         am.addSeparator()
         tm = am.addMenu("화면 모양")
         cur = theme.MODE if theme.MODE in ("dark", "light") else "auto"
-        for key, label in (("auto", "윈도우 설정 따라가기"), ("dark", "다크 — 차분한 작업실"), ("light", "라이트 — 미니멀 그리드")):
+        for key, label in (("auto", "윈도우 설정 따라가기"), ("dark", "다크 — 블루"), ("light", "라이트 — 화이트 블루")):
             a = tm.addAction(label, lambda key=key: self.appAction.emit("theme:" + key))
             a.setCheckable(True)
             a.setChecked(key == cur)
@@ -386,7 +384,7 @@ class Sidebar(QWidget):
         self.app_menu_btn.setMenu(am)
 
         self.new_btn = QPushButton("  새로운 아이디어")
-        self.new_btn.setIcon(icons.icon("plus", theme.ON_ACCENT if theme.MINIMAL else theme.TEXT))
+        self.new_btn.setIcon(icons.icon("plus", theme.ON_ACCENT))
         self.new_btn.setObjectName("newBtn")
         self.new_btn.setToolTip("Ctrl+N")
         self.new_btn.clicked.connect(self.newRequested)
