@@ -458,6 +458,68 @@ class Store:
         self.db.commit()
         return mid
 
+    # ---------- 메모함: 모든 메모 + 미분류 메모 (idea_uuid = '' = 아직 아이디어에 안 넣음) ----------
+    INBOX = ""
+
+    def all_memos(self, query=""):
+        """지워지지 않은 메모 전부 (최신순) + 아이디어 제목. 지운 아이디어의 메모는 뺌."""
+        sql = """SELECT m.*, i.title AS idea_title FROM memos m
+                 LEFT JOIN ideas i ON i.uuid=m.idea_uuid AND i.deleted=0
+                 WHERE m.deleted=0 AND (m.idea_uuid='' OR i.uuid IS NOT NULL)"""
+        args = []
+        q = query.strip()
+        if q:
+            like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            sql += " AND (m.body LIKE ? ESCAPE '\\' OR i.title LIKE ? ESCAPE '\\')"
+            args = [like, like]
+        return self.db.execute(sql + " ORDER BY m.created_at DESC", args).fetchall()
+
+    def inbox_count(self):
+        return self.db.execute("SELECT COUNT(*) FROM memos WHERE deleted=0 AND idea_uuid=''").fetchone()[0]
+
+    def move_memos(self, mids, uid):
+        """메모를 아이디어에 넣기 (uid='' 이면 미분류로 빼기)."""
+        t = now_ms()
+        self.db.executemany("UPDATE memos SET idea_uuid=?, updated_at=? WHERE uuid=?", [(uid, t, m) for m in mids])
+        self.db.commit()
+
+    def delete_memos(self, mids):
+        t = now_ms()
+        self.db.executemany("UPDATE memos SET deleted=1, updated_at=? WHERE uuid=?", [(t, m) for m in mids])
+        self.db.commit()
+
+    def memo_to_idea(self, mid):
+        """미분류 메모 → 새 아이디어 (첫 줄이 제목, 메모는 그 아이디어로). 돌려주는 값: 새 아이디어 uuid"""
+        row = self.db.execute("SELECT body FROM memos WHERE uuid=?", (mid,)).fetchone()
+        first = (row["body"] if row else "").strip().splitlines()
+        uid = self.create((first[0] if first else "새 아이디어")[:80])
+        self.move_memos([mid], uid)
+        return uid
+
+    def idea_to_memos(self, uid):
+        """아이디어 → 미분류 메모로 되돌리기: 제목·요약·기획서·기능을 메모 하나로 남기고, 메모들은 미분류로 옮긴 뒤 아이디어는 지움."""
+        r = self.get(uid)
+        if r is None:
+            return 0
+        parts = [r["title"]] if r["title"] else []
+        if r["summary"]:
+            parts.append(r["summary"])
+        for sec in self.sections(uid):
+            if sec["content"].strip():
+                parts.append("[%s] %s" % (sec["title"], sec["content"].strip()))
+        feats = [f["text"] for f in self.features(uid)]
+        if feats:
+            parts.append("기능: " + ", ".join(feats))
+        memos = self.memos(uid)
+        mids = [m["uuid"] for m in memos]
+        # 제목뿐이고 그 제목이 이미 어떤 메모의 첫 줄이면 (메모 → 아이디어로 만든 것) 같은 메모를 또 만들지 않음
+        only_title = parts == [r["title"]] and any(m["body"].strip().splitlines()[:1] == [r["title"]] for m in memos)
+        if parts and not only_title:
+            mids.append(self.add_memo(self.INBOX, "\n".join(parts)))
+        self.move_memos(mids, self.INBOX)
+        self.delete(uid)
+        return len(mids)
+
     def update_memo(self, mid, body):
         self.db.execute("UPDATE memos SET body=?, updated_at=? WHERE uuid=?", (body, now_ms(), mid))
         self.db.commit()

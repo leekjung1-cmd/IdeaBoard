@@ -31,6 +31,7 @@ from dashboard import DashboardPage
 from devkit import DevView
 import focus
 import icons
+from memoinbox import MemoInboxPage
 import weekly
 from gantt import GanttWindow
 import export
@@ -309,6 +310,8 @@ class Sidebar(QWidget):
     todosRequested = Signal()
     reviewRequested = Signal()
     timetableRequested = Signal()
+    inboxRequested = Signal()
+    toMemos = Signal(list)              # 아이디어들 → 미분류 메모로 되돌리기
     appAction = Signal(str)
     ideaSelected = Signal(str)
     bulkStatus = Signal(list, str)      # 아이디어 uuid 들, 바꿀 상태
@@ -394,6 +397,14 @@ class Sidebar(QWidget):
         self.todo_btn.setToolTip("할일을 포스트잇 벽으로 보기 (Ctrl+Shift+T)")
         self.todo_btn.clicked.connect(self.todosRequested)
         self.set_todo_count(0)
+
+        self.inbox_btn = QPushButton()
+        self.inbox_btn.setObjectName("sideBtn")
+        self.inbox_btn.setCheckable(True)
+        self.inbox_btn.setToolTip("모든 메모 + 빠른 입력으로 들어온 미분류 메모")
+        self.inbox_btn.setIcon(icons.icon("chat", theme.TEXT_DIM))
+        self.inbox_btn.clicked.connect(self.inboxRequested)
+        self.set_inbox_count(0)
 
         self.tt_btn = QPushButton("  주간 시간표")
         self.tt_btn.setIcon(icons.icon("table", theme.TEXT_DIM))
@@ -494,6 +505,7 @@ class Sidebar(QWidget):
         top.addLayout(name_row)
         top.addWidget(self.new_btn)
         top.addWidget(self.dash_btn)
+        top.addWidget(self.inbox_btn)
         top.addWidget(self.gantt_btn)
         top.addWidget(self.todo_btn)
         top.addWidget(self.tt_btn)
@@ -519,6 +531,9 @@ class Sidebar(QWidget):
         ver.setStyleSheet("color:%s; padding:2px 14px;" % theme.TEXT_OFF)
         ver.setToolTip("아이디어 보드 버전")
         lay.addWidget(ver)
+
+    def set_inbox_count(self, n):
+        self.inbox_btn.setText("  메모함" + ("   미분류 %d" % n if n else ""))
 
     def set_todo_count(self, n):
         self.todo_btn.setText("  할일" + ("   %d" % n if n else ""))
@@ -658,11 +673,12 @@ class Sidebar(QWidget):
                 self.list.setCurrentRow(i)
                 break
         self.list.blockSignals(False)
-        self.dash_btn.setChecked(uid is None)
+        self.dash_btn.setChecked(uid is None and not self.inbox_btn.isChecked())
 
     def _current_changed(self, cur, _prev):
         if cur is not None and not self.picking:
             self.dash_btn.setChecked(False)
+            self.inbox_btn.setChecked(False)
             self.shown = cur.data(UID)
             self.ideaSelected.emit(self.shown)
 
@@ -683,6 +699,7 @@ class Sidebar(QWidget):
                 a.setChecked(True)
         if not self.picking:
             m.addAction("여러 개 선택 (체크해서 한꺼번에)", lambda: self.start_pick(uid))
+        m.addAction("메모로 되돌리기" + many, lambda: self.toMemos.emit(uids))
         m.addSeparator()
         m.addAction("삭제" + many, lambda: self.bulkDelete.emit(uids))
         m.exec(self.list.viewport().mapToGlobal(pos))
@@ -772,6 +789,7 @@ class Sidebar(QWidget):
 class IdeaPage(QWidget):
     changed = Signal(str)        # 저장했음 (uid)
     deleteRequested = Signal(str)
+    toMemos = Signal(list)
 
     def __init__(self, store_, data_dir, parent=None):
         super().__init__(parent)
@@ -804,6 +822,7 @@ class IdeaPage(QWidget):
         mm.addAction("내용 복사 (마크다운)", lambda: self._export("copy"))
         mm.addAction("마크다운 파일로 내보내기…", lambda: self._export("file"))
         mm.addSeparator()
+        mm.addAction("메모로 되돌리기 (아이디어는 지우고 내용은 미분류 메모로)", lambda: self.uid and self.toMemos.emit([self.uid]))
         mm.addAction("이 아이디어 삭제", lambda: self.uid and self.deleteRequested.emit(self.uid))
         more.setMenu(mm)
         more.setStyleSheet("QToolButton { font-size:16pt; padding:0 8px; } QToolButton::menu-indicator { image:none; }")
@@ -1157,9 +1176,11 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar(self.store)
         self.dashboard = DashboardPage(self.store)
         self.page = IdeaPage(self.store, data_dir)
+        self.inbox = MemoInboxPage(self.store)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.dashboard)
         self.stack.addWidget(self.page)
+        self.stack.addWidget(self.inbox)
 
         self.split = QSplitter(Qt.Horizontal)
         self.split.addWidget(self.sidebar)
@@ -1175,6 +1196,11 @@ class MainWindow(QMainWindow):
         self.sidebar.ganttRequested.connect(self.open_gantt)
         self.sidebar.todosRequested.connect(self.open_todos)
         self.sidebar.reviewRequested.connect(self.open_review)
+        self.sidebar.inboxRequested.connect(self.show_inbox)
+        self.sidebar.toMemos.connect(self.ideas_to_memos)
+        self.page.toMemos.connect(self.ideas_to_memos)
+        self.inbox.changed.connect(self._memos_changed)
+        self.inbox.openIdea.connect(self.open_idea)
         self.sidebar.timetableRequested.connect(self.open_timetable)
         self.timetable = None
         self.sidebar.appAction.connect(self._app_action)
@@ -1215,21 +1241,54 @@ class MainWindow(QMainWindow):
         self.sidebar.viewChanged.connect(self._save_settings)
         self.sidebar.refresh()
         self.sidebar.set_todo_count(self.store.open_todo_count())
+        self.sidebar.set_inbox_count(self.store.inbox_count())
         self.show_dashboard()
         # 분류가 목표 기준으로 바뀜 → 예전 분류 아이디어가 있으면 한 번 옮기기 창
         if self.store.old_category_ideas() and self.settings.get("cat_move_asked") != "1.7.0":
             QTimer.singleShot(700, self._first_category_move)
 
     # ---------- 화면 전환 ----------
+    def show_inbox(self):
+        self.page.flush()
+        self.page.uid = None
+        self.sidebar.inbox_btn.setChecked(True)
+        self.sidebar.select(None)
+        self.inbox.show_inbox() if self.store.inbox_count() else self.inbox.refresh()
+        self.stack.setCurrentWidget(self.inbox)
+
+    def _memos_changed(self):
+        self.sidebar.set_inbox_count(self.store.inbox_count())
+        self.sidebar.refresh(self.sidebar.current())
+
+    def ideas_to_memos(self, uids):
+        self.page.flush()
+        rows = [r for r in (self.store.get(u) for u in uids) if r is not None]
+        if not rows:
+            return
+        names = "\n".join("· " + (r["title"] or "(제목 없음)") for r in rows[:8])
+        if QMessageBox.question(self, "메모로 되돌리기",
+                                "아이디어 %d개를 미분류 메모로 되돌릴까요?\n\n%s\n\n제목·요약·기획서·기능은 메모 하나로 남고, "
+                                "원래 메모들은 미분류로 옮겨져요. 아이디어는 목록에서 지워져요." % (len(rows), names)) != QMessageBox.Yes:
+            return
+        n = sum(self.store.idea_to_memos(r["uuid"]) for r in rows)
+        if self.page.uid in uids:
+            self.page.uid = None
+        self.sidebar.end_pick()
+        self._after_remote_change(set(uids))
+        self.show_inbox()
+        QMessageBox.information(self, "메모로 되돌리기", "미분류 메모 %d개가 됐어요. 메모함에서 나중에 아이디어에 넣으면 돼요." % n)
+
     def show_dashboard(self):
         self.page.flush()
         self.page.uid = None
+        self.sidebar.inbox_btn.setChecked(False)
         self.sidebar.select(None)
         self.dashboard.refresh()
         self._check_review_time()
         self.stack.setCurrentWidget(self.dashboard)
 
     def open_idea(self, uid):
+        self.sidebar.inbox_btn.setChecked(False)
         if self.page.load(uid):
             self.sidebar.select(uid)
             self.stack.setCurrentWidget(self.page)
@@ -1391,6 +1450,9 @@ class MainWindow(QMainWindow):
             self.dashboard.refresh()
         self._refresh_gantt()
         self._todos_changed()
+        self.sidebar.set_inbox_count(self.store.inbox_count())
+        if self.stack.currentWidget() is self.inbox:
+            self.inbox.refresh()        # 폰에서 빠른 입력으로 넣은 메모 등
         if getattr(self, "timetable", None) is not None and self.timetable.isVisible():
             self.timetable.refresh()        # 폰에서 시간표를 바꿨을 수도
 
