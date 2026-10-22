@@ -84,12 +84,17 @@ class MemoBubble(QFrame):
                            % theme.TEXT_DIM)
         more.clicked.connect(lambda: self._menu(more.mapToGlobal(more.rect().bottomLeft())))
 
+        self.struck = bool(row["struck"]) if "struck" in row.keys() else False
         self.body = QLabel(self.body_text)
         self.body.setTextFormat(Qt.PlainText)
+        if self.struck:         # 줄 그은 메모: 흐리게 + 가운데 줄
+            f = self.body.font()
+            f.setStrikeOut(True)
+            self.body.setFont(f)
         self.body.setWordWrap(True)
         self.body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.body.setContextMenuPolicy(Qt.NoContextMenu)     # 우클릭은 이 칸(메모) 메뉴로
-        self.body.setStyleSheet("background:transparent; border:none;")
+        self.body.setStyleSheet("background:transparent; border:none;%s" % (" color:%s;" % theme.TEXT_OFF if self.struck else ""))
 
         # 고치기용 (평소엔 숨김)
         self.editor = AutoText(min_lines=1)
@@ -129,6 +134,8 @@ class MemoBubble(QFrame):
         sel = self.body.selectedText()
         m.addAction("선택한 글 복사" if sel else "복사",
                     lambda: QGuiApplication.clipboard().setText(sel or self.body_text))
+        m.addAction("줄 풀기" if self.struck else "줄 긋기 (이제 필요 없음)",
+                    lambda: self.request.emit(self.mid, "strike", not self.struck))
         m.addAction("고치기", self.start_edit)
         sub = m.addMenu("기획서 칸에 넣기")
         for sid, title in self.sections():
@@ -263,6 +270,9 @@ class MemoView(QWidget):
         if what == "edit":
             self.store.update_memo(mid, value)
             self.load(self.uid, keep_scroll=True)
+        elif what == "strike":
+            self.store.set_memo_struck(mid, value)
+            QTimer.singleShot(0, lambda: self.load(self.uid, keep_scroll=True))
         elif what == "delete":
             if QMessageBox.question(self, "메모 삭제", "이 메모를 삭제할까요?") != QMessageBox.Yes:
                 return

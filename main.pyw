@@ -182,10 +182,6 @@ class NewIdeaDialog(QDialog):
         self.dev.setToolTip("켜면 '개발' 탭(만드는 순서 · 클로드에게 부탁하기 · 개발 폴더 만들기)과\n"
                             "기능마다 '확인하는 법' 칸이 생겨요. 나중에 아이디어 화면에서 켜고 꺼도 돼요.")
         form.addRow("", self.dev)
-        self.shorts = QCheckBox("쇼츠 소재")
-        self.shorts.setIcon(icons.icon("film", theme.TEXT_DIM))
-        self.shorts.setToolTip("여행·장비처럼 짧은 영상으로 만들 수 있는 아이디어. 메뉴 → 쇼츠 소재 모아보기에서 한 번에 봐요.")
-        form.addRow("", self.shorts)
 
         hint = QLabel("진행 중은 %d개까지. 나머지는 보관함에." % store.ACTIVE_LIMIT)
         hint.setToolTip("중요도·긴급도가 %d 이상이면 '높음'으로 보고 대시보드 4분면에 놓아요. 모르겠으면 미정으로." % store.HIGH)
@@ -215,7 +211,7 @@ class NewIdeaDialog(QDialog):
                     importance=self.importance.value(),
                     urgency=self.urgency.value(), start_date=self.start.value(),
                     due_date=self.due.value(), dev=1 if self.dev.isChecked() else 0,
-                    next_step=self.next_step.text().strip(), shorts=1 if self.shorts.isChecked() else 0)
+                    next_step=self.next_step.text().strip())
 
 
 # ---------------------------------------------------------------- 왼쪽 목록
@@ -288,7 +284,7 @@ class IdeaDelegate(QStyledItemDelegate):
 
         title = index.data(Qt.DisplayRole) or "(제목 없음)"
         left = dot.right() + 10
-        for role, mark in ((DEV_ROLE, "code"), (SHORTS_ROLE, "film")):     # 개발 프로젝트 · 쇼츠 소재 표시
+        for role, mark in ((DEV_ROLE, "code"),):     # 개발 프로젝트 표시
             if index.data(role):
                 icons.draw(p, mark, QRect(left, r.center().y() - 7, 14, 14), theme.TEXT_DIM)
                 left += 19
@@ -360,7 +356,6 @@ class Sidebar(QWidget):
         am.addAction("백업 파일 만들기…", lambda: self.appAction.emit("backup"))
         am.addAction("폰 연결 (와이파이 동기화)…", lambda: self.appAction.emit("phone"))
         am.addSeparator()
-        am.addAction(icons.icon("film"), "쇼츠 소재 모아보기…", lambda: self.appAction.emit("shorts"))
         am.addAction("분류 옮기기 (목표 기준으로)…", lambda: self.appAction.emit("categories"))
         am.addSeparator()
         am.addAction("예전 데이터·백업 가져오기 (합치기)…", lambda: self.appAction.emit("import"))
@@ -548,7 +543,7 @@ class Sidebar(QWidget):
         all_rows = self.store.ideas(self.search.text())
         rows = self._sorted([r for r in all_rows if r["status"] not in self.hidden
                              and r["category"] not in self.hidden_cats and (r["dev"] or not self.dev_only)
-                             and (r["shorts"] or not self.shorts_only)])
+])
         if self.picking:
             self.picked &= {r["uuid"] for r in rows}
         self.list.blockSignals(True)
@@ -617,10 +612,6 @@ class Sidebar(QWidget):
         a.setCheckable(True)
         a.setChecked(self.dev_only)
         a.toggled.connect(lambda on: self._set_view(dev_only=on))
-        a = m.addAction("쇼츠 소재만")
-        a.setCheckable(True)
-        a.setChecked(self.shorts_only)
-        a.toggled.connect(lambda on: self._set_view(shorts_only=on))
         m.addSection("정렬")
         for key, label in self.SORTS:
             a = m.addAction(label)
@@ -661,7 +652,7 @@ class Sidebar(QWidget):
         self.sort_mode = st.get("sort", "recent") if st.get("sort") in dict(self.SORTS) else "recent"
         self.hidden_cats = set(st.get("hidden_cats", []))
         self.dev_only = bool(st.get("dev_only", False))
-        self.shorts_only = bool(st.get("shorts_only", False))
+        self.shorts_only = False
 
     def select(self, uid):
         """uid 선택 (None 이면 선택 해제). 신호는 안 보냄."""
@@ -844,7 +835,7 @@ class IdeaPage(QWidget):
             "QToolButton:checked { background:%s; border-color:%s; color:%s; }"
             % (theme.BORDER, theme.TEXT_DIM, theme.ACCENT, theme.ITEM_SEL, theme.ACCENT, theme.TEXT))
         self.dev_btn.toggled.connect(self._toggle_dev)
-        self.shorts_btn = QToolButton()
+        self.shorts_btn = QToolButton()        # 쇼츠 표시는 뺐음 (숨김)
         self.shorts_btn.setText("쇼츠")
         self.shorts_btn.setIcon(icons.icon("film", theme.TEXT_DIM))
         self.shorts_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -855,7 +846,7 @@ class IdeaPage(QWidget):
 
         head = QHBoxLayout()
         head.addWidget(self.title, 1)
-        head.addWidget(self.shorts_btn, 0, Qt.AlignVCenter)
+        self.shorts_btn.hide()
         head.addWidget(self.dev_btn, 0, Qt.AlignVCenter)
         head.addWidget(self.link_btn, 0, Qt.AlignVCenter)
         head.addWidget(more, 0, Qt.AlignTop)

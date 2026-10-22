@@ -4,6 +4,7 @@
 삭제는 지우지 않고 deleted=1 (동기화 때 상대편에도 삭제를 알리기 위해).
 """
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -169,7 +170,13 @@ FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 # 4 = v1.5.0 (개발 프로젝트: ideas.dev·dev_folder, features.criteria)
 # 5 = v1.6.0 (ideas.next_step, 상태 이름 바꿈: 아이디어·기획 → 보관함, 개발 중 → 진행 중)
 # 6 = v1.7.0 (ideas.shorts, 주간 시간표 timetable)
-SCHEMA_VERSION = 6
+# 7 = v1.10.0 (memos.struck 줄긋기, 띄어쓰기만 다른 분류 합치기)
+SCHEMA_VERSION = 7
+
+
+def cat_key(c):
+    """분류 비교용: 띄어쓰기 무시 ('미래의 목표' = '미래의목표')."""
+    return re.sub(r"\s+", "", c or "")
 
 
 def now_ms():
@@ -216,6 +223,10 @@ class Store:
             self.db.execute("ALTER TABLE ideas ADD COLUMN next_step TEXT NOT NULL DEFAULT ''")
         if "shorts" not in cols:
             self.db.execute("ALTER TABLE ideas ADD COLUMN shorts INTEGER NOT NULL DEFAULT 0")
+        if "struck" not in {r["name"] for r in self.db.execute("PRAGMA table_info(memos)")}:
+            self.db.execute("ALTER TABLE memos ADD COLUMN struck INTEGER NOT NULL DEFAULT 0")
+        if ver < 7:
+            self._merge_categories()
         if ver < 5:
             # 상태 이름만 바꿈 (고친 시각은 그대로 → 폰과 주고받을 때 괜히 '바뀜'으로 안 잡힘. 폰 앱도 같은 규칙으로 바꿔 읽음)
             for old, new in OLD_STATUS.items():
@@ -225,6 +236,30 @@ class Store:
                 self.db.execute("ALTER TABLE %s ADD COLUMN pc_seen INTEGER NOT NULL DEFAULT 0" % t)
         if ver < SCHEMA_VERSION:
             self.db.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
+
+    def _merge_categories(self):
+        """띄어쓰기만 다른 분류를 하나로 (많이 쓴 쪽, 같으면 띄어 쓴 쪽 이름). 폰에도 가게 고친 시각을 바꿈."""
+        used = self.db.execute("SELECT category, COUNT(*) n FROM ideas WHERE deleted=0 AND category<>'' "
+                               "GROUP BY category").fetchall()
+        groups = {}
+        for r in used:
+            groups.setdefault(cat_key(r["category"]), []).append((r["category"], r["n"]))
+        t = now_ms()
+        for names in groups.values():
+            if len(names) < 2:
+                continue
+            keep = sorted(names, key=lambda x: (-x[1], -x[0].count(" ")))[0][0]
+            for old, _n in names:
+                if old != keep:
+                    self.db.execute("UPDATE ideas SET category=?, updated_at=? WHERE category=?", (keep, t, old))
+
+    def canon_category(self, c):
+        """이미 쓰는 분류와 띄어쓰기만 다르면 그 이름으로."""
+        c = re.sub(r"\s+", " ", (c or "").strip())
+        for have in self.categories():
+            if cat_key(have) == cat_key(c):
+                return have
+        return c
 
     def categories(self):
         """기본 용도 + 직접 입력해서 쓰고 있는 용도."""
@@ -277,6 +312,8 @@ class Store:
             self.db.commit()
 
     def _set(self, uid, fields, t):
+        if fields.get("category"):
+            fields = dict(fields, category=self.canon_category(fields["category"]))
         bad = set(fields) - set(IDEA_COLUMNS)
         if bad:
             raise ValueError("모르는 항목: %s" % ", ".join(sorted(bad)))
@@ -481,6 +518,11 @@ class Store:
         """메모를 아이디어에 넣기 (uid='' 이면 미분류로 빼기)."""
         t = now_ms()
         self.db.executemany("UPDATE memos SET idea_uuid=?, updated_at=? WHERE uuid=?", [(uid, t, m) for m in mids])
+        self.db.commit()
+
+    def set_memo_struck(self, mid, on):
+        """메모에 줄 긋기 (이제 쓸모없어진 메모) / 풀기."""
+        self.db.execute("UPDATE memos SET struck=?, updated_at=? WHERE uuid=?", (1 if on else 0, now_ms(), mid))
         self.db.commit()
 
     def delete_memos(self, mids):

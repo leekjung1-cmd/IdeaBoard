@@ -58,8 +58,13 @@ class MemoCard(QFrame):
         when.setStyleSheet("color:%s;" % theme.TEXT_OFF)
         body = QLabel(row["body"])
         body.setWordWrap(True)
+        self.struck = bool(row["struck"])
+        if self.struck:
+            f = body.font()
+            f.setStrikeOut(True)
+            body.setFont(f)
         body.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        body.setStyleSheet("padding:2px 0;")
+        body.setStyleSheet("padding:2px 0;%s" % (" color:%s;" % theme.TEXT_OFF if self.struck else ""))
 
         top = QHBoxLayout()
         top.setSpacing(8)
@@ -81,6 +86,8 @@ class MemoCard(QFrame):
         else:
             m.addAction("다른 아이디어로 옮기기…", lambda: self.request.emit(self.mid, "pick", more))
             m.addAction("미분류로 빼기", lambda: self.request.emit(self.mid, "unassign", None))
+        m.addAction("줄 풀기" if self.struck else "줄 긋기 (이제 필요 없음)",
+                    lambda: self.request.emit(self.mid, "strike", not self.struck))
         m.addSeparator()
         m.addAction("지우기", lambda: self.request.emit(self.mid, "delete", None))
         more.setMenu(m)
@@ -262,6 +269,8 @@ class MemoInboxPage(QWidget):
             return
         if what == "unassign":
             self.store.move_memos([mid], self.store.INBOX)
+        elif what == "strike":
+            self.store.set_memo_struck(mid, value)
         elif what == "new":
             uid = self.store.memo_to_idea(mid)
             self._done()
