@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 import theme
-from store import QUADRANTS, quadrant
+from store import ACTIVE, QUADRANTS, quadrant
 
 LEFT_W = 250        # 왼쪽 목록 너비
 HEAD_H = 58         # 위 날짜 줄 높이
@@ -571,7 +571,10 @@ class GanttWindow(QDialog):
         self.changed.emit(uid)
 
     def refresh(self):
-        rows = [r for r in self.store.ideas() if self.show_done.isChecked() or r["status"] != "완료"]
+        # 일정표엔 '진행 중'이거나 목표일을 정한 것만 (나중에 할 것까지 다 나오면 복잡해서)
+        rows = [r for r in self.store.ideas()
+                if (r["status"] == ACTIVE or r["due_date"])
+                and (self.show_done.isChecked() or r["status"] != "완료")]
         c = self.canvas
         left = c.date_at(LEFT_W)            # 보고 있던 왼쪽 끝 날짜 (날짜 범위가 바뀌어도 같은 곳을 보게)
         v = self.vbar.value()
