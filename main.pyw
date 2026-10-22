@@ -581,6 +581,10 @@ class Sidebar(QWidget):
     SORTS = (("recent", "최근 활동순"), ("priority", "우선순위순 (지금 할 것 먼저)"), ("due", "목표일순"))
 
     def _sorted(self, rows):
+        # 어떤 정렬이든 '진행 중'이 맨 위 (지금 하고 있는 것 먼저)
+        return sorted(self._sorted_inner(rows), key=lambda r: r["status"] != store.ACTIVE)
+
+    def _sorted_inner(self, rows):
         if self.sort_mode == "priority":
             order = {1: 0, 2: 1, 3: 2, 4: 3, 0: 4}
             return sorted(rows, key=lambda r: (order[quadrant(r["importance"], r["urgency"])],
