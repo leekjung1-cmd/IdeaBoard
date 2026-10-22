@@ -12,7 +12,8 @@ import icons
 import theme
 from memos import MemoInput, _dt, time_text
 
-FILTER_ALL, FILTER_INBOX = "all", "inbox"
+FILTER_ALL, FILTER_INBOX, FILTER_OVERVIEW = "all", "inbox", "overview"
+STATUS_RANK = {"진행 중": 0, "보관함": 1, "보류": 2}
 
 
 def idea_menu(parent, store_, on_pick, exclude=None):
@@ -179,12 +180,19 @@ class MemoInboxPage(QWidget):
         self.filter.clear()
         n = self.store.inbox_count()
         self.filter.addItem("전체", FILTER_ALL)
+        self.filter.addItem("한눈에 — 아이디어별 안 한 기능 + 메모", FILTER_OVERVIEW)
         self.filter.addItem("미분류만 (%d)" % n, FILTER_INBOX)
         for r in self.store.ideas():
             self.filter.addItem("아이디어: " + (r["title"] or "(제목 없음)"), r["uuid"])
         i = self.filter.findData(cur) if cur else 0
         self.filter.setCurrentIndex(max(0, i))
         self.filter.blockSignals(False)
+
+    def show_overview(self):
+        """한눈에 보기로 열기."""
+        self._fill_filter()
+        self.filter.setCurrentIndex(max(0, self.filter.findData(FILTER_OVERVIEW)))
+        self.refresh()
 
     def show_inbox(self):
         """미분류만 보기로 열기."""
@@ -196,6 +204,8 @@ class MemoInboxPage(QWidget):
         if self.filter.count() == 0:
             self._fill_filter()
         mode = self.filter.currentData() or FILTER_ALL
+        if mode == FILTER_OVERVIEW:
+            return self._overview()
         rows = self.store.all_memos(self.search.text())
         if mode == FILTER_INBOX:
             rows = [r for r in rows if r["idea_uuid"] == ""]
@@ -234,6 +244,93 @@ class MemoInboxPage(QWidget):
         total = len(self.store.all_memos())
         self.count.setText("메모 %d개 · 미분류 %d개" % (total, self.store.inbox_count()))
         self._update_bulk()
+
+    def _overview(self):
+        """한눈에: 아이디어마다 안 한 기능 + 메모 (줄 그은 메모 빼고). 진행 중 → 보관함 → 보류, 완료는 뺌."""
+        q = self.search.text().strip().lower()
+        memos = [r for r in self.store.all_memos(self.search.text()) if not r["struck"]]
+        pos = self.scroll.verticalScrollBar().value()
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 10, 10)
+        lay.setSpacing(10)
+        self.cards = []
+        inbox = [r for r in memos if r["idea_uuid"] == ""]
+        ideas = sorted((r for r in self.store.ideas() if r["status"] in STATUS_RANK),
+                       key=lambda r: (STATUS_RANK[r["status"]], r["position"]))
+        n_feat = n_memo = 0
+        if inbox:
+            lay.addWidget(self._ov_card(None, "미분류 메모", [], inbox))
+            n_memo += len(inbox)
+        for idea in ideas:
+            feats = [f for f in self.store.features(idea["uuid"]) if not f["done"]
+                     and (not q or q in f["text"].lower() or q in (idea["title"] or "").lower())]
+            ms = [m for m in memos if m["idea_uuid"] == idea["uuid"]]
+            if not feats and not ms:
+                continue
+            lay.addWidget(self._ov_card(idea, idea["title"] or "(제목 없음)", feats, ms))
+            n_feat += len(feats)
+            n_memo += len(ms)
+        if not n_feat and not n_memo:
+            e = QLabel("안 한 기능도 메모도 없어요.")
+            e.setAlignment(Qt.AlignCenter)
+            e.setStyleSheet("color:%s; padding:40px;" % theme.TEXT_DIM)
+            lay.addWidget(e)
+        lay.addStretch(1)
+        self.scroll.setWidget(body)
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(pos))
+        self.count.setText("안 한 기능 %d개 · 메모 %d개" % (n_feat, n_memo))
+        self._update_bulk()
+
+    def _ov_card(self, idea, title, feats, memos):
+        card = QFrame()
+        card.setObjectName("ovcard")
+        card.setStyleSheet("#ovcard { background:%s; border:1px solid %s; border-radius:%dpx; }"
+                           % (theme.PANEL, theme.BORDER, theme.r(10)))
+        v = QVBoxLayout(card)
+        v.setContentsMargins(16, 12, 16, 12)
+        v.setSpacing(4)
+        head = QHBoxLayout()
+        t = QPushButton(title)
+        t.setFlat(True)
+        t.setCursor(Qt.PointingHandCursor)
+        t.setStyleSheet("QPushButton { text-align:left; font-weight:bold; font-size:12pt; border:none; padding:0; color:%s; }"
+                        "QPushButton:hover { color:%s; }" % (theme.TEXT, theme.ACCENT))
+        if idea:
+            t.setToolTip("아이디어 열기")
+            t.clicked.connect(lambda _c=False, uid=idea["uuid"]: self.openIdea.emit(uid))
+        head.addWidget(t, 1)
+        if idea:
+            st = QLabel(idea["status"])
+            st.setStyleSheet("color:%s;" % (theme.ACCENT if idea["status"] == "진행 중" else theme.TEXT_DIM))
+            head.addWidget(st)
+        v.addLayout(head)
+        if idea and idea["next_step"]:
+            ns = QLabel("다음 한 걸음: " + idea["next_step"])
+            ns.setStyleSheet("color:%s;" % theme.ACCENT)
+            v.addWidget(ns)
+
+        def sub(text):
+            lb = QLabel(text)
+            lb.setStyleSheet("color:%s; font-size:9pt; padding-top:6px;" % theme.TEXT_DIM)
+            v.addWidget(lb)
+
+        if feats:
+            sub("안 한 기능  %d" % len(feats))
+            for f in feats:
+                cb = QCheckBox(f["text"] + ("   · " + f["priority"] if f["priority"] != "필수" else ""))
+                cb.setToolTip("체크하면 다 한 기능으로")
+                cb.toggled.connect(lambda on, fid=f["uuid"]: on and (self.store.update_feature(fid, done=1), self._done()))
+                v.addWidget(cb)
+        if memos:
+            sub("메모  %d" % len(memos))
+            for m in memos:
+                lb = QLabel("· " + m["body"].strip())
+                lb.setWordWrap(True)
+                lb.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                lb.setToolTip(_dt(m["created_at"]).strftime("%m/%d ") + time_text(_dt(m["created_at"])))
+                v.addWidget(lb)
+        return card
 
     def _add_card(self, lay, r):
         c = MemoCard(r)

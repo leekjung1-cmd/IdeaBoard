@@ -26,6 +26,9 @@ OLD_CATEGORIES = {"일상", "취미", "업무", "공용", "미래의 목표", "�
 # 주간 시간표: 평일(월~금) 밤 9시 반부터 30분씩
 WEEKDAYS = ["월", "화", "수", "목", "금"]
 SLOTS = ["21:30", "22:00", "22:30", "23:00", "23:30"]
+# 할일 알림 시간대 기본값 (이름, 'HH:MM'). 설정에서 바꿀 수 있음
+REMIND_PRESETS = [("출근할 때", "08:00"), ("점심 때", "12:30"), ("퇴근할 때", "18:00"),
+                  ("집에 가면", "20:00"), ("자기 전", "23:00")]
 LEVELS = [1, 2, 3, 4, 5]          # 중요도·긴급도
 HIGH = 4                          # 이 값 이상이면 '높음'
 
@@ -60,7 +63,7 @@ DEV_SECTIONS = [
 ]
 
 IDEA_COLUMNS = ("title", "summary", "status", "category", "importance", "urgency",
-                "start_date", "due_date", "dev", "dev_folder", "next_step", "shorts")
+                "start_date", "due_date", "dev", "dev_folder", "next_step", "shorts", "position")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ideas(
@@ -73,6 +76,7 @@ CREATE TABLE IF NOT EXISTS ideas(
     dev_folder TEXT NOT NULL DEFAULT '',    -- 개발 시작 때 만든 폴더 (PC)
     next_step TEXT NOT NULL DEFAULT '',     -- 다음 한 걸음: 30분 안에 끝낼 다음 행동 1개
     shorts INTEGER NOT NULL DEFAULT 0,      -- 1 = 쇼츠(짧은 영상) 소재
+    position REAL NOT NULL DEFAULT 0,       -- 목록에서 내가 정한 순서 (작을수록 위)
     importance INTEGER,             -- 1~5, NULL = 미정
     urgency INTEGER,                -- 1~5, NULL = 미정
     start_date TEXT,                -- 'YYYY-MM-DD' 또는 NULL
@@ -145,6 +149,8 @@ CREATE TABLE IF NOT EXISTS todos(
     idea_uuid TEXT,
     x REAL,
     y REAL,
+    remind_at TEXT,                         -- 알림 시각 'YYYY-MM-DDTHH:MM' (폰이 알려줌), NULL = 없음
+    remind_label TEXT NOT NULL DEFAULT '',  -- 고른 시간대 이름 (예: 집에 가면), 직접 정했으면 ''
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted INTEGER NOT NULL DEFAULT 0
@@ -171,7 +177,8 @@ FEATURE_PRIORITIES = ["필수", "있으면 좋음", "나중에"]
 # 5 = v1.6.0 (ideas.next_step, 상태 이름 바꿈: 아이디어·기획 → 보관함, 개발 중 → 진행 중)
 # 6 = v1.7.0 (ideas.shorts, 주간 시간표 timetable)
 # 7 = v1.10.0 (memos.struck 줄긋기, 띄어쓰기만 다른 분류 합치기)
-SCHEMA_VERSION = 7
+# 8 = v1.11.0 (ideas.position 내가 정한 순서, todos.remind_at·remind_label 알림)
+SCHEMA_VERSION = 8
 
 
 def cat_key(c):
@@ -225,6 +232,14 @@ class Store:
             self.db.execute("ALTER TABLE ideas ADD COLUMN shorts INTEGER NOT NULL DEFAULT 0")
         if "struck" not in {r["name"] for r in self.db.execute("PRAGMA table_info(memos)")}:
             self.db.execute("ALTER TABLE memos ADD COLUMN struck INTEGER NOT NULL DEFAULT 0")
+        if "position" not in cols:
+            self.db.execute("ALTER TABLE ideas ADD COLUMN position REAL NOT NULL DEFAULT 0")
+            self._init_positions()
+        tcols = {r["name"] for r in self.db.execute("PRAGMA table_info(todos)")}
+        if "remind_at" not in tcols:
+            self.db.execute("ALTER TABLE todos ADD COLUMN remind_at TEXT")
+        if "remind_label" not in tcols:
+            self.db.execute("ALTER TABLE todos ADD COLUMN remind_label TEXT NOT NULL DEFAULT ''")
         if ver < 7:
             self._merge_categories()
         if ver < 5:
@@ -236,6 +251,36 @@ class Store:
                 self.db.execute("ALTER TABLE %s ADD COLUMN pc_seen INTEGER NOT NULL DEFAULT 0" % t)
         if ver < SCHEMA_VERSION:
             self.db.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
+
+    def _init_positions(self):
+        """처음 순서 = 지금까지 보이던 최근 활동순. 고친 시각은 그대로 (폰도 같은 규칙으로 같은 순서를 만듦)."""
+        for i, r in enumerate(self.ideas()):
+            self.db.execute("UPDATE ideas SET position=? WHERE uuid=?", (float(i + 1), r["uuid"]))
+
+    def move_idea(self, uid, after=None, before=None):
+        """목록에서 끌어 옮김: after(바로 위에 올 아이디어) 다음, 없으면 before(바로 아래) 앞으로.
+        옮긴 아이디어 하나만 고침 (사이 값)."""
+        order = [r["uuid"] for r in self.db.execute(
+            "SELECT uuid FROM ideas WHERE deleted=0 ORDER BY position, created_at DESC") if r["uuid"] != uid]
+        pos = {r["uuid"]: r["position"] for r in self.db.execute("SELECT uuid, position FROM ideas WHERE deleted=0")}
+        if after in pos and after in order:
+            i = order.index(after) + 1
+        elif before in pos and before in order:
+            i = order.index(before)
+        else:
+            return
+        lo = pos[order[i - 1]] if i > 0 else None
+        hi = pos[order[i]] if i < len(order) else None
+        if lo is not None and hi is not None and hi - lo < 1e-6:      # 사이가 너무 좁아지면 전부 다시 매김
+            t = now_ms()
+            for k, u in enumerate(order):
+                self.db.execute("UPDATE ideas SET position=?, updated_at=? WHERE uuid=?", (float(k + 1), t, u))
+            pos = {u: float(k + 1) for k, u in enumerate(order)}
+            lo = pos[order[i - 1]] if i > 0 else None
+            hi = pos[order[i]] if i < len(order) else None
+        new = (lo + hi) / 2 if lo is not None and hi is not None else (hi - 1 if lo is None else lo + 1)
+        self._set(uid, {"position": new}, now_ms())
+        self.db.commit()
 
     def _merge_categories(self):
         """띄어쓰기만 다른 분류를 하나로 (많이 쓴 쪽, 같으면 띄어 쓴 쪽 이름). 폰에도 가게 고친 시각을 바꿈."""
@@ -298,8 +343,9 @@ class Store:
     def create(self, title, **fields):
         uid = str(uuid.uuid4())
         t = now_ms()
-        self.db.execute("INSERT INTO ideas(uuid, title, status, created_at, updated_at) VALUES(?,?,?,?,?)",
-                        (uid, title.strip(), STATUSES[0], t, t))
+        top = self.db.execute("SELECT MIN(position) FROM ideas WHERE deleted=0").fetchone()[0]
+        self.db.execute("INSERT INTO ideas(uuid, title, status, position, created_at, updated_at) VALUES(?,?,?,?,?,?)",
+                        (uid, title.strip(), STATUSES[0], (top or 1) - 1, t, t))      # 새 아이디어는 맨 위
         if fields:
             self._set(uid, fields, t)
         self._default_sections(uid, {}, t)
@@ -745,7 +791,7 @@ class Store:
                 for t in self.SYNC_TABLES}
 
     # ---------- 할일 (포스트잇) ----------
-    TODO_FIELDS = ("text", "color", "done", "due_date", "idea_uuid", "x", "y")
+    TODO_FIELDS = ("text", "color", "done", "due_date", "idea_uuid", "x", "y", "remind_at", "remind_label")
 
     def todos(self):
         """삭제 안 된 할일 전부 (+ 관련 아이디어 제목)."""

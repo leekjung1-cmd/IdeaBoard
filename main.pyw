@@ -38,6 +38,7 @@ import export
 from features import FeatureView
 from links import LinkButton
 from phone import PhoneDialog
+import todo
 from todo import TodoWindow
 from memos import MemoView
 from store import ACTIVE, QUADRANTS, STATUSES, quadrant
@@ -299,6 +300,19 @@ class IdeaDelegate(QStyledItemDelegate):
         p.restore()
 
 
+class IdeaList(QListWidget):
+    """끌어서 순서 바꾸기 ('내가 정한 순서' 보기일 때만 켬). 놓으면 moved(옮긴 uid, 놓은 뒤 보이는 순서)."""
+    moved = Signal(str, list)
+
+    def dropEvent(self, ev):
+        it = self.currentItem()
+        uid = it.data(UID) if it else None
+        super().dropEvent(ev)
+        if uid:
+            order = [(self.item(i).data(UID), self.item(i).data(STATUS_ROLE)) for i in range(self.count())]
+            QTimer.singleShot(0, lambda: self.moved.emit(uid, order))      # 목록을 다시 그리는 건 놓기가 끝난 뒤
+
+
 class Sidebar(QWidget):
     newRequested = Signal()
     dashboardRequested = Signal()
@@ -307,6 +321,7 @@ class Sidebar(QWidget):
     reviewRequested = Signal()
     timetableRequested = Signal()
     inboxRequested = Signal()
+    overviewRequested = Signal()
     toMemos = Signal(list)              # 아이디어들 → 미분류 메모로 되돌리기
     appAction = Signal(str)
     ideaSelected = Signal(str)
@@ -401,6 +416,12 @@ class Sidebar(QWidget):
         self.inbox_btn.clicked.connect(self.inboxRequested)
         self.set_inbox_count(0)
 
+        self.ov_btn = QPushButton("  한눈에 보기")
+        self.ov_btn.setIcon(icons.icon("expand", theme.TEXT_DIM))
+        self.ov_btn.setObjectName("sideBtn")
+        self.ov_btn.setToolTip("아이디어마다 안 한 기능 + 메모를 한 화면에")
+        self.ov_btn.clicked.connect(self.overviewRequested)
+
         self.tt_btn = QPushButton("  주간 시간표")
         self.tt_btn.setIcon(icons.icon("table", theme.TEXT_DIM))
         self.tt_btn.setObjectName("sideBtn")
@@ -425,7 +446,7 @@ class Sidebar(QWidget):
         self.hidden_cats = set()        # 목록에서 숨길 용도 ('' = 용도 없음)
         self.dev_only = False           # 개발 프로젝트만 보기
         self.shorts_only = False        # 쇼츠 소재만 보기
-        self.sort_mode = "recent"
+        self.sort_mode = "manual"
         self.view_btn = QToolButton()
         self.view_btn.setText("보기 ▾")
         self.view_btn.setToolTip("상태 필터 · 정렬")
@@ -436,8 +457,11 @@ class Sidebar(QWidget):
         self.view_menu.aboutToShow.connect(self._build_view_menu)
         self.view_btn.setMenu(self.view_menu)
 
-        self.list = QListWidget()
+        self.list = IdeaList()
         self.list.setItemDelegate(IdeaDelegate(self.list))
+        self.list.setDefaultDropAction(Qt.MoveAction)
+        self.list.setDropIndicatorShown(True)
+        self.list.moved.connect(self._moved)
         self.list.setMouseTracking(True)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -501,6 +525,7 @@ class Sidebar(QWidget):
         top.addWidget(self.new_btn)
         top.addWidget(self.dash_btn)
         top.addWidget(self.inbox_btn)
+        top.addWidget(self.ov_btn)
         top.addWidget(self.gantt_btn)
         top.addWidget(self.todo_btn)
         top.addWidget(self.tt_btn)
@@ -573,16 +598,32 @@ class Sidebar(QWidget):
             text += "  (%d개 숨김)" % (len(all_rows) - len(rows))
         self.section.setText(text)
         self._update_pick_bar()
-        active = bool(self.hidden or self.hidden_cats or self.dev_only or self.shorts_only) or self.sort_mode != "recent"
+        # 끌어서 순서 바꾸기는 '내가 정한 순서'로 볼 때만 (다른 정렬에선 끌어도 의미가 없음)
+        self.list.setDragDropMode(QAbstractItemView.InternalMove if self.sort_mode == "manual" and not self.picking
+                                  else QAbstractItemView.NoDragDrop)
+        active = bool(self.hidden or self.hidden_cats or self.dev_only or self.shorts_only) or self.sort_mode != "manual"
         self.view_btn.setStyleSheet("QToolButton { color:%s; padding:2px 6px; } "
                                     "QToolButton::menu-indicator { image:none; }"
                                     % (theme.ACCENT if active else theme.TEXT_DIM))
 
-    SORTS = (("recent", "최근 활동순"), ("priority", "우선순위순 (지금 할 것 먼저)"), ("due", "목표일순"))
+    SORTS = (("manual", "내가 정한 순서 (끌어서 옮기기)"), ("recent", "최근 활동순"),
+             ("priority", "우선순위순 (지금 할 것 먼저)"), ("due", "목표일순"))
+
+    def _moved(self, uid, order):
+        """끌어 놓은 자리 → 같은 상태 묶음 안에서 바로 위·아래 아이디어 사이로."""
+        st = dict(order).get(uid)
+        same = [u for u, s in order if s == st]
+        i = same.index(uid)
+        after = same[i - 1] if i > 0 else None
+        before = same[i + 1] if i + 1 < len(same) else None
+        if after or before:
+            self.store.move_idea(uid, after=after, before=before)
+        self.refresh(self.current())
 
     def _sorted(self, rows):
-        # 어떤 정렬이든 '진행 중'이 맨 위 (지금 하고 있는 것 먼저)
-        return sorted(self._sorted_inner(rows), key=lambda r: r["status"] != store.ACTIVE)
+        # 어떤 정렬이든 상태 묶음 순서: 진행 중(지금 하고 있는 것) → 보관함 → 보류 → 완료
+        rank = {store.ACTIVE: 0, "보류": 2, "완료": 3}
+        return sorted(self._sorted_inner(rows), key=lambda r: rank.get(r["status"], 1))
 
     def _sorted_inner(self, rows):
         if self.sort_mode == "priority":
@@ -592,6 +633,8 @@ class Sidebar(QWidget):
                                                r["due_date"] or "9999"))
         if self.sort_mode == "due":
             return sorted(rows, key=lambda r: (r["due_date"] is None, r["due_date"] or "", -r["activity"]))
+        if self.sort_mode == "manual":
+            return sorted(rows, key=lambda r: (r["position"], -r["created_at"]))
         return rows     # store 가 이미 최근 활동순
 
     def _build_view_menu(self):
@@ -648,12 +691,13 @@ class Sidebar(QWidget):
         self.viewChanged.emit()
 
     def view_state(self):
-        return {"hidden": sorted(self.hidden), "hidden_cats": sorted(self.hidden_cats), "sort": self.sort_mode,
+        return {"hidden": sorted(self.hidden), "hidden_cats": sorted(self.hidden_cats), "sort2": self.sort_mode,
                 "dev_only": self.dev_only, "shorts_only": self.shorts_only}
 
     def set_view_state(self, st):
         self.hidden = set(st.get("hidden", [])) & set(STATUSES)
-        self.sort_mode = st.get("sort", "recent") if st.get("sort") in dict(self.SORTS) else "recent"
+        # v1.11.0~ 기본은 '내가 정한 순서' (예전 'sort' 값은 안 씀)
+        self.sort_mode = st.get("sort2") if st.get("sort2") in dict(self.SORTS) else "manual"
         self.hidden_cats = set(st.get("hidden_cats", []))
         self.dev_only = bool(st.get("dev_only", False))
         self.shorts_only = False
@@ -1192,6 +1236,7 @@ class MainWindow(QMainWindow):
         self.sidebar.todosRequested.connect(self.open_todos)
         self.sidebar.reviewRequested.connect(self.open_review)
         self.sidebar.inboxRequested.connect(self.show_inbox)
+        self.sidebar.overviewRequested.connect(self.show_overview)
         self.sidebar.toMemos.connect(self.ideas_to_memos)
         self.page.toMemos.connect(self.ideas_to_memos)
         self.inbox.changed.connect(self._memos_changed)
@@ -1233,6 +1278,9 @@ class MainWindow(QMainWindow):
         self.split.setSizes([self.settings.get("sidebar_width", 270), 900])
 
         self.sidebar.set_view_state(self.settings.get("list_view", {}))
+        # 할일 알림 시간대 (설정에 저장)
+        todo.TodoDialog.presets = [tuple(x) for x in self.settings.get("remind_presets", store.REMIND_PRESETS)]
+        todo.TodoDialog.save_presets = self._save_presets
         self.sidebar.viewChanged.connect(self._save_settings)
         self.sidebar.refresh()
         self.sidebar.set_todo_count(self.store.open_todo_count())
@@ -1249,6 +1297,14 @@ class MainWindow(QMainWindow):
         self.sidebar.inbox_btn.setChecked(True)
         self.sidebar.select(None)
         self.inbox.show_inbox() if self.store.inbox_count() else self.inbox.refresh()
+        self.stack.setCurrentWidget(self.inbox)
+
+    def show_overview(self):
+        self.page.flush()
+        self.page.uid = None
+        self.sidebar.inbox_btn.setChecked(True)
+        self.sidebar.select(None)
+        self.inbox.show_overview()
         self.stack.setCurrentWidget(self.inbox)
 
     def _memos_changed(self):
@@ -1552,6 +1608,10 @@ class MainWindow(QMainWindow):
             if win is not None:
                 win.close()
         super().closeEvent(ev)
+
+    def _save_presets(self, presets):
+        self.settings["remind_presets"] = [list(x) for x in presets]
+        self._save_settings()
 
     def _save_settings(self):
         g = self.normalGeometry() if self.isMaximized() else self.geometry()

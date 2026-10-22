@@ -5,19 +5,19 @@
 """
 import random
 import zlib
-from datetime import date
+from datetime import date, datetime, timedelta
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTime, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QKeySequence, QLinearGradient, QPainter, QPen, QPixmap, QPolygonF, QShortcut, QTextOption
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGraphicsDropShadowEffect,
     QGraphicsObject, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QMenu, QMessageBox, QPlainTextEdit,
-    QPushButton, QSlider, QVBoxLayout,
+    QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 import icons
 import theme
-from store import TODO_COLORS
+from store import REMIND_PRESETS, TODO_COLORS
 from widgets import DateField
 
 NOTE_W, NOTE_H = 200, 180
@@ -37,6 +37,72 @@ def dday(due):
     if n == 0:
         return "오늘까지", "#c0392b"
     return "D-%d" % n, ("#a15c00" if n <= 3 else "#555555")
+
+
+def remind_text(row):
+    """'알림 10/22 20:00 · 집에 가면' (없으면 '')"""
+    at = row["remind_at"] if "remind_at" in row.keys() else None
+    if not at:
+        return ""
+    d, t = at.split("T")
+    label = row["remind_label"] if "remind_label" in row.keys() else ""
+    return "알림 %s %s%s" % (d[5:].replace("-", "/"), t, "  ·  " + label if label else "")
+
+
+def next_at(hhmm):
+    """그 시각이 오늘 아직 안 지났으면 오늘, 지났으면 내일 (date, QTime)."""
+    h, m = map(int, hhmm.split(":"))
+    now = datetime.now()
+    d = date.today() if (h, m) > (now.hour, now.minute) else date.today() + timedelta(days=1)
+    return d, QTime(h, m)
+
+
+class PresetDialog(QDialog):
+    """알림 시간대 고치기: 이름 + 시각."""
+
+    def __init__(self, presets, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("알림 시간대")
+        self.setMinimumSize(360, 320)
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["이름 (예: 집에 가면)", "시각 (예: 20:00)"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().hide()
+        for name, hhmm in presets:
+            self._add(name, hhmm)
+        add = QPushButton("＋ 추가")
+        add.clicked.connect(lambda: self._add("", "09:00"))
+        rm = QPushButton("고른 줄 지우기")
+        rm.clicked.connect(lambda: self.table.removeRow(self.table.currentRow()) if self.table.currentRow() >= 0 else None)
+        row = QHBoxLayout()
+        row.addWidget(add)
+        row.addWidget(rm)
+        row.addStretch(1)
+        buttons = QDialogButtonBox()
+        buttons.addButton("저장", QDialogButtonBox.AcceptRole)
+        buttons.addButton("취소", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("할일 알림에서 고를 시간대예요. 폰 설정에서도 따로 정할 수 있어요."))
+        lay.addWidget(self.table, 1)
+        lay.addLayout(row)
+        lay.addWidget(buttons)
+
+    def _add(self, name, hhmm):
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, 0, QTableWidgetItem(name))
+        self.table.setItem(r, 1, QTableWidgetItem(hhmm))
+
+    def values(self):
+        out = []
+        for r in range(self.table.rowCount()):
+            name = (self.table.item(r, 0).text() if self.table.item(r, 0) else "").strip()
+            t = QTime.fromString((self.table.item(r, 1).text() if self.table.item(r, 1) else "").strip(), "H:mm")
+            if name and t.isValid():
+                out.append((name, t.toString("HH:mm")))
+        return out
 
 
 def wall_tile():
@@ -101,7 +167,8 @@ class NoteItem(QGraphicsObject):
         opt = QTextOption()
         opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         p.save()
-        body = QRectF(14, 14, NOTE_W - 50, NOTE_H - 58)      # 오른쪽 위 동그라미와 안 겹치게
+        rt = remind_text(self.row)
+        body = QRectF(14, 14, NOTE_W - 50, NOTE_H - (76 if rt else 58))      # 오른쪽 위 동그라미와 안 겹치게
         p.setClipRect(body)
         p.drawText(body.adjusted(0, 0, 0, 200), self.row["text"] or "(빈 할일)", opt)
         p.restore()
@@ -113,6 +180,10 @@ class NoteItem(QGraphicsObject):
         p.setFont(small)
         label, col = dday(self.row["due_date"])
         y = NOTE_H - 40
+        if rt:
+            p.setPen(QColor("#1f5fbf"))
+            p.drawText(QRectF(14, y - 18, NOTE_W - 28, 18), Qt.AlignLeft | Qt.AlignVCenter,
+                       p.fontMetrics().elidedText(rt, Qt.ElideRight, NOTE_W - 28))
         if label:
             p.setPen(QColor(col))
             f2 = QFont(small)
@@ -161,6 +232,8 @@ class NoteItem(QGraphicsObject):
 
 class TodoDialog(QDialog):
     """새 할일 / 고치기."""
+    presets = list(REMIND_PRESETS)      # 알림 시간대 [(이름, 'HH:MM')] — 본 창이 설정에서 채움
+    save_presets = None                 # 시간대를 고쳤을 때 저장할 함수
 
     def __init__(self, ideas, row=None, parent=None):
         super().__init__(parent)
@@ -199,6 +272,39 @@ class TodoDialog(QDialog):
         form.addRow("색", colors)
         form.addRow("기한", self.due)
         form.addRow("관련 아이디어", self.idea)
+
+        # 알림: 없음 / 시간대(집에 가면 …) / 직접 정하기 → 그 시각에 폰이 알려줌
+        self.remind = QComboBox()
+        self.remind_date = DateField()
+        self.remind_time = QTimeEdit()
+        self.remind_time.setDisplayFormat("HH:mm")
+        self.remind_time.setButtonSymbols(QTimeEdit.NoButtons)
+        edit_presets = QPushButton("시간대 고치기…")
+        edit_presets.setFlat(True)
+        edit_presets.setStyleSheet("color:%s;" % theme.ACCENT)
+        edit_presets.clicked.connect(self._edit_presets)
+        self._fill_remind()
+        at = row["remind_at"] if row and "remind_at" in row.keys() else None
+        label = (row["remind_label"] if row and "remind_label" in row.keys() else "") or ""
+        if at:
+            d, t = at.split("T")
+            self.remind_date.setValue(d)
+            self.remind_time.setTime(QTime.fromString(t, "HH:mm"))
+            i = self.remind.findData(label) if label else -1
+            self.remind.setCurrentIndex(i if i >= 0 else self.remind.count() - 1)
+        self.remind.currentIndexChanged.connect(self._remind_picked)
+        self.remind_when = QWidget()
+        wl = QHBoxLayout(self.remind_when)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.addWidget(self.remind_date)
+        wl.addWidget(self.remind_time)
+        wl.addStretch(1)
+        rrow = QHBoxLayout()
+        rrow.addWidget(self.remind, 1)
+        rrow.addWidget(edit_presets)
+        form.addRow("알림", rrow)
+        form.addRow("", self.remind_when)
+        self.remind_when.setVisible(bool(at))
         buttons = QDialogButtonBox()
         self.ok = buttons.addButton("저장" if row else "붙이기", QDialogButtonBox.AcceptRole)
         buttons.addButton("취소", QDialogButtonBox.RejectRole)
@@ -212,9 +318,49 @@ class TodoDialog(QDialog):
         lay.addWidget(buttons)
         self.text.setFocus()
 
+    def _fill_remind(self):
+        self.remind.blockSignals(True)
+        self.remind.clear()
+        self.remind.addItem("없음", None)
+        for name, hhmm in self.presets:
+            self.remind.addItem("%s  (%s)" % (name, hhmm), name)
+        self.remind.addItem("시간 직접 정하기", "")
+        self.remind.blockSignals(False)
+
+    def _remind_picked(self, _i):
+        key = self.remind.currentData()
+        self.remind_when.setVisible(key is not None)
+        if key:             # 시간대: 그 시각이 오늘 지났으면 내일
+            d, t = next_at(dict(self.presets)[key])
+            self.remind_date.setValue(d.isoformat())
+            self.remind_time.setTime(t)
+        elif key == "" and not self.remind_date.value():     # 직접: 기본은 한 시간 뒤
+            n = datetime.now() + timedelta(hours=1)
+            self.remind_date.setValue(n.date().isoformat())
+            self.remind_time.setTime(QTime(n.hour, 0))
+
+    def _edit_presets(self):
+        dlg = PresetDialog(self.presets, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        TodoDialog.presets = dlg.values()
+        if TodoDialog.save_presets:
+            TodoDialog.save_presets(TodoDialog.presets)
+        cur = self.remind.currentData()
+        self._fill_remind()
+        i = self.remind.findData(cur)
+        self.remind.setCurrentIndex(i if i >= 0 else 0)
+
     def values(self):
+        key = self.remind.currentData()
+        at = None
+        if key is not None:
+            at = "%sT%s" % (self.remind_date.value() or date.today().isoformat(), self.remind_time.time().toString("HH:mm"))
+        label = key or ""
+        if label and dict(self.presets).get(label) != self.remind_time.time().toString("HH:mm"):
+            label = ""          # 시각을 손으로 바꿨으면 시간대 이름은 안 붙임
         return dict(text=self.text.toPlainText().strip(), color=self.color, due_date=self.due.value(),
-                    idea_uuid=self.idea.currentData())
+                    idea_uuid=self.idea.currentData(), remind_at=at, remind_label=label)
 
 
 class WallView(QGraphicsView):
