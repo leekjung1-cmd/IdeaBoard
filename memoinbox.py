@@ -14,6 +14,9 @@ from memos import MemoInput, _dt, time_text
 
 FILTER_ALL, FILTER_INBOX, FILTER_OVERVIEW = "all", "inbox", "overview"
 STATUS_RANK = {"진행 중": 0, "보관함": 1, "보류": 2}
+# 한눈에 보기의 메모 칸 색 (기능 칸은 파랑 = 테마 강조색)
+MEMO_INK = "#e0a526" if theme.DARK else "#b7791f"
+MEMO_BG = "#221d12" if theme.DARK else "#fdf6e3"
 
 
 def idea_menu(parent, store_, on_pick, exclude=None):
@@ -310,27 +313,60 @@ class MemoInboxPage(QWidget):
             ns.setStyleSheet("color:%s;" % theme.ACCENT)
             v.addWidget(ns)
 
-        def sub(text):
-            lb = QLabel(text)
-            lb.setStyleSheet("color:%s; font-size:9pt; padding-top:6px;" % theme.TEXT_DIM)
-            v.addWidget(lb)
-
-        if feats:
-            sub("안 한 기능  %d" % len(feats))
+        # 기능(파랑 칸)과 메모(노랑 칸)를 나란히: 한눈에 어느 게 뭔지 보이게
+        cols = QHBoxLayout()
+        cols.setSpacing(10)
+        if idea is not None:
+            fbox, fl = self._ov_box("할 기능", len(feats), "check-square", theme.ACCENT, theme.HIGHLIGHT)
             for f in feats:
                 cb = QCheckBox(f["text"] + ("   · " + f["priority"] if f["priority"] != "필수" else ""))
                 cb.setToolTip("체크하면 다 한 기능으로")
+                cb.setStyleSheet("QCheckBox { background:transparent; padding:2px 0; }")
                 cb.toggled.connect(lambda on, fid=f["uuid"]: on and (self.store.update_feature(fid, done=1), self._done()))
-                v.addWidget(cb)
-        if memos:
-            sub("메모  %d" % len(memos))
-            for m in memos:
-                lb = QLabel("· " + m["body"].strip())
-                lb.setWordWrap(True)
-                lb.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                lb.setToolTip(_dt(m["created_at"]).strftime("%m/%d ") + time_text(_dt(m["created_at"])))
-                v.addWidget(lb)
+                fl.addWidget(cb)
+            if not feats:
+                fl.addWidget(self._ov_empty("남은 기능 없음"))
+            fl.addStretch(1)
+            cols.addWidget(fbox, 1, Qt.AlignTop)
+        mbox, ml = self._ov_box("메모", len(memos), "chat", MEMO_INK, MEMO_BG)
+        for m in memos:
+            lb = QLabel(m["body"].strip())
+            lb.setWordWrap(True)
+            lb.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            lb.setToolTip(_dt(m["created_at"]).strftime("%m/%d ") + time_text(_dt(m["created_at"])))
+            lb.setStyleSheet("background:transparent; border:none; border-left:3px solid %s; padding:2px 0 2px 8px;" % MEMO_INK)
+            ml.addWidget(lb)
+        if not memos:
+            ml.addWidget(self._ov_empty("메모 없음"))
+        ml.addStretch(1)
+        cols.addWidget(mbox, 1, Qt.AlignTop)
+        v.addSpacing(6)
+        v.addLayout(cols)
         return card
+
+    def _ov_box(self, title, n, icon, ink, bg):
+        box = QFrame()
+        box.setObjectName("ovbox")
+        box.setStyleSheet("#ovbox { background:%s; border:none; border-radius:%dpx; }" % (bg, theme.r(8)))
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        ic = QLabel()
+        ic.setPixmap(icons.icon(icon, ink, 16).pixmap(16, 16))
+        ic.setStyleSheet("background:transparent;")
+        lb = QLabel("%s  %d" % (title, n))
+        lb.setStyleSheet("background:transparent; color:%s; font-weight:bold;" % ink)
+        head.addWidget(ic)
+        head.addWidget(lb, 1)
+        lay.addLayout(head)
+        return box, lay
+
+    def _ov_empty(self, text):
+        lb = QLabel(text)
+        lb.setStyleSheet("background:transparent; color:%s;" % theme.TEXT_OFF)
+        return lb
 
     def _add_card(self, lay, r):
         c = MemoCard(r)
