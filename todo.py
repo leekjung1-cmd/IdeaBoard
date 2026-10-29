@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 import icons
 import theme
+from alarm import SNOOZES, PlusButton, after
 from store import REMIND_PRESETS, TODO_COLORS
 from widgets import DateField
 
@@ -251,7 +252,7 @@ class TodoDialog(QDialog):
             b.setChecked(c == self.color)
             b.setFixedSize(30, 30)
             b.setToolTip(NAMES[c])
-            b.setStyleSheet("QPushButton { background:%s; border:2px solid %s; border-radius:15px; }"
+            b.setStyleSheet("QPushButton { background:%s; border:2px solid %s; border-radius:15px; padding:0; min-width:0; }"
                             "QPushButton:checked { border:3px solid %s; }" % (PAPER[c], theme.BORDER, theme.TEXT))
             b.clicked.connect(lambda _c=False, c=c: setattr(self, "color", c))
             group.addButton(b)
@@ -279,6 +280,8 @@ class TodoDialog(QDialog):
         self.remind_time = QTimeEdit()
         self.remind_time.setDisplayFormat("HH:mm")
         self.remind_time.setButtonSymbols(QTimeEdit.NoButtons)
+        self.remind_time.setStyleSheet("QTimeEdit { padding:6px 12px; border:1px solid %s; border-radius:8px; background:%s; }"
+                                       % (theme.BORDER, theme.FIELD))
         edit_presets = QPushButton("시간대 고치기…")
         edit_presets.setFlat(True)
         edit_presets.setStyleSheet("color:%s;" % theme.ACCENT)
@@ -303,6 +306,18 @@ class TodoDialog(QDialog):
         rrow.addWidget(self.remind, 1)
         rrow.addWidget(edit_presets)
         form.addRow("알림", rrow)
+        # 빠르게: 10분 뒤 · 30분 뒤 · 1시간 뒤 · ＋(누른 횟수만큼 시간 뒤)
+        quick = QHBoxLayout()
+        quick.setSpacing(6)
+        self.plus = PlusButton(wait=False)
+        for label, mins in SNOOZES:
+            b = QPushButton(label)
+            b.clicked.connect(lambda _c=False, m=mins: (self.plus.reset(), self._remind_in(m)))
+            quick.addWidget(b)
+        self.plus.picked.connect(self._remind_in)
+        quick.addWidget(self.plus)
+        quick.addStretch(1)
+        form.addRow("", quick)
         form.addRow("", self.remind_when)
         self.remind_when.setVisible(bool(at))
         buttons = QDialogButtonBox()
@@ -317,6 +332,14 @@ class TodoDialog(QDialog):
         lay.addLayout(form)
         lay.addWidget(buttons)
         self.text.setFocus()
+
+    def _remind_in(self, mins):
+        """지금부터 mins 분 뒤로 (직접 정하기 칸에 채움)."""
+        at = after(mins)
+        self.remind.setCurrentIndex(self.remind.count() - 1)      # 시간 직접 정하기
+        self.remind_date.setValue(at[:10])
+        self.remind_time.setTime(QTime.fromString(at[11:], "HH:mm"))
+        self.remind_when.setVisible(True)
 
     def _fill_remind(self):
         self.remind.blockSignals(True)

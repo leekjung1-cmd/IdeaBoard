@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 import datadir
+import popupfix
 import store
 import sync
 import theme
@@ -38,6 +39,7 @@ import export
 from features import FeatureView
 from links import LinkButton
 from phone import PhoneDialog
+import alarm
 import todo
 from todo import TodoWindow
 from memos import MemoView
@@ -1114,85 +1116,6 @@ class IdeaPage(QWidget):
 
 # ---------------------------------------------------------------- 메인 창
 
-class PopupScreenFix(QObject):
-    """듀얼 모니터에서 창이 엉뚱한 모니터에 뜨는 Qt 버그 보정.
-    - 드롭다운 목록: 드롭다운 바로 아래 (파일 정리 앱과 같음)
-    - 대화창(새 아이디어·확인 창 등): 본 창 가운데, 본 창과 같은 모니터
-    - 메뉴(달력·⋯): 마우스가 있는 모니터 안"""
-
-    def eventFilter(self, obj, ev):
-        if ev.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow():
-            if obj.metaObject().className() == "QComboBoxPrivateContainer":
-                combo = obj.parent()
-                if isinstance(combo, QComboBox):
-                    self.place(obj, combo)
-                    QTimer.singleShot(0, lambda: self.place(obj, combo))
-            elif isinstance(obj, QDialog) and obj.parentWidget() is not None:
-                self.center(obj)
-                QTimer.singleShot(0, lambda: self.center(obj))
-            elif isinstance(obj, QMenu):
-                self.keep_menu(obj)
-        return False
-
-    @staticmethod
-    def _move_to_screen(win, scr):
-        handle = win.windowHandle()
-        if handle is not None and handle.screen() is not scr:
-            handle.setScreen(scr)
-
-    @classmethod
-    def center(cls, dlg):
-        if not dlg.isVisible():
-            return
-        owner = dlg.parentWidget().window()
-        og = owner.frameGeometry()
-        scr = QApplication.screenAt(og.center()) or owner.screen()
-        cls._move_to_screen(dlg, scr)
-        avail = scr.availableGeometry()
-        fg = dlg.frameGeometry()
-        x = og.center().x() - fg.width() // 2
-        y = og.center().y() - fg.height() // 2
-        x = max(avail.left(), min(x, avail.right() - fg.width() + 1))
-        y = max(avail.top(), min(y, avail.bottom() - fg.height() + 1))
-        if (x, y) != (fg.x(), fg.y()):
-            dlg.move(x, y)
-
-    @classmethod
-    def keep_menu(cls, menu):
-        scr = QApplication.screenAt(QCursor.pos())
-        if scr is None:
-            return
-        g = menu.geometry()
-        if scr.geometry().contains(g.topLeft()):
-            return
-        cls._move_to_screen(menu, scr)
-        avail = scr.availableGeometry()
-        p = QCursor.pos()
-        menu.move(max(avail.left(), min(p.x(), avail.right() - g.width() + 1)),
-                  max(avail.top(), min(p.y(), avail.bottom() - g.height() + 1)))
-
-    @staticmethod
-    def place(popup, combo):
-        if not popup.isVisible():
-            return
-        top_left = combo.mapToGlobal(QPoint(0, 0))
-        scr = QApplication.screenAt(top_left + QPoint(combo.width() // 2, combo.height() // 2)) or combo.screen()
-        handle = popup.windowHandle()
-        if handle is not None and handle.screen() is not scr:
-            handle.setScreen(scr)
-        avail = scr.availableGeometry()
-        w, h = max(popup.width(), combo.width()), popup.height()
-        if h > avail.height():
-            h = avail.height()
-            popup.resize(w, h)
-        x = min(max(top_left.x(), avail.left()), avail.right() - w + 1)
-        y = top_left.y() + combo.height()
-        if y + h > avail.bottom() + 1:
-            y = top_left.y() - h
-        y = max(avail.top(), min(y, avail.bottom() - h + 1))
-        popup.move(x, y)
-
-
 class MainWindow(QMainWindow):
     def __init__(self, data_dir=DATA_DIR):
         super().__init__()
@@ -1281,6 +1204,9 @@ class MainWindow(QMainWindow):
         # 할일 알림 시간대 (설정에 저장)
         todo.TodoDialog.presets = [tuple(x) for x in self.settings.get("remind_presets", store.REMIND_PRESETS)]
         todo.TodoDialog.save_presets = self._save_presets
+        # 할일 알람: 시각이 되면 팝업 (폰도 같이 울림)
+        self.alarms = alarm.AlarmWatcher(self.store, self.settings, self._save_settings, self)
+        self.alarms.changed.connect(self._alarm_changed)
         self.sidebar.viewChanged.connect(self._save_settings)
         self.sidebar.refresh()
         self.sidebar.set_todo_count(self.store.open_todo_count())
@@ -1550,6 +1476,12 @@ class MainWindow(QMainWindow):
         self.todo_win.raise_()
         self.todo_win.activateWindow()
 
+    def _alarm_changed(self):
+        """알람 팝업에서 끝냄·미룸."""
+        self._todos_changed()
+        if self.stack.currentWidget() is self.dashboard:
+            self.dashboard.refresh()
+
     def _todos_changed(self):
         """대시보드 칸에서 체크했을 때."""
         self.sidebar.set_todo_count(self.store.open_todo_count())
@@ -1641,8 +1573,7 @@ def main():
         pass
     app = QApplication(sys.argv)
     theme.apply(app)
-    app._popup_fix = PopupScreenFix(app)
-    app.installEventFilter(app._popup_fix)
+    popupfix.install(app)      # 듀얼 모니터: 메뉴·대화창이 엉뚱한 모니터에 뜨지 않게 (업무자동화와 같은 최신판)
     QLocale.setDefault(QLocale(QLocale.Korean, QLocale.SouthKorea))
     tr = QTranslator(app)       # 예/아니요 같은 기본 버튼을 한국어로
     tr_dir = (QLibraryInfo.path(QLibraryInfo.TranslationsPath) if hasattr(QLibraryInfo, "path")
